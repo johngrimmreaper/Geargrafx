@@ -1,0 +1,5 @@
+geargrafx (1.7.2-1~ppa1~noble1) noble; urgency=medium
+
+  * Initial PPA build for Noble using SDL3 from my PPA.
+
+ -- Reaper <JohnGrimmReaper@disroot.org>  Thu, 19 Mar 2026 17:24:39 +0000
