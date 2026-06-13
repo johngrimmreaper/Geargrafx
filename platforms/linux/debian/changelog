@@ -1,8 +1,18 @@
-geargrafx (1.7.2-1~ppa1~noble1) noble; urgency=medium
+geargrafx (1.7.10-1~linux1) UNRELEASED; urgency=medium
 
-  * Initial PPA build for Noble.
+  * Merge upstream Geargrafx 1.7.10.
+  * Install the game executable under /usr/games.
+  * Depend on sdl-gamecontrollerdb instead of shipping a private
+    gamecontrollerdb.txt copy.
+  * Enable i386, amd64, armhf, and arm64 package builds.
+
+ -- Nacho Sanchez <863613+drhelius@users.noreply.github.com>  Sat, 13 Jun 2026 23:15:29 +0000
+
+geargrafx (1.7.2-1~linux1) UNRELEASED; urgency=medium
+
+  * Initial PPA build for Ubuntu 24.04 Noble.
   * Add Debian packaging for Geargrafx 1.7.2.
-  * Build against libsdl3-dev from the ubuntu-goodies PPA.
+  * Build against libsdl3-dev from the PPA repository ppa:johngrimmreaper/24.04 .
   * Install the binary under /usr/games.
   * Add a desktop entry and application icon.
   * Add a minimal manual page.
