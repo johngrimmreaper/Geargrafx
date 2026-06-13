@@ -34,8 +34,5 @@ override_dh_install:
 		debian/geargrafx/usr/lib/geargrafx/shaders/
 	install -m644 platforms/shared/desktop/shaders/README.md \
 		debian/geargrafx/usr/lib/geargrafx/shaders/
-	install -dm755 debian/geargrafx/usr/games
-	ln -s ../lib/geargrafx/geargrafx debian/geargrafx/usr/games/geargrafx
-
 override_dh_shlibdeps:
 	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info
