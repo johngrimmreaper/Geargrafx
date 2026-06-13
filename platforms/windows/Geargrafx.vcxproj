@@ -24,11 +24,16 @@
     <ClCompile Include="..\..\src\arcade_card_mapper.cpp" />
     <ClCompile Include="..\..\src\cdrom_chd_image.cpp" />
     <ClCompile Include="..\..\src\cdrom_cuebin_image.cpp" />
+    <ClCompile Include="..\..\src\cdrom_file.cpp" />
+    <ClCompile Include="..\..\src\cdrom_file_native.cpp" />
     <ClCompile Include="..\..\src\cdrom_image.cpp" />
     <ClCompile Include="..\..\src\media.cpp" />
     <ClCompile Include="..\..\src\cdrom_audio.cpp" />
     <ClCompile Include="..\..\src\cdrom_media.cpp" />
     <ClCompile Include="..\..\src\cdrom.cpp" />
+    <ClCompile Include="..\..\src\cdrom_drive.cpp" />
+    <ClCompile Include="..\..\src\cdrom_physical_image.cpp" />
+    <ClCompile Include="..\..\src\cdrom_drive_win32.cpp" />
     <ClCompile Include="..\..\src\scsi_controller.cpp" />
     <ClCompile Include="..\..\src\geargrafx_core.cpp" />
     <ClCompile Include="..\..\src\huc6202.cpp" />
@@ -44,6 +49,7 @@
     <ClCompile Include="..\..\src\memory.cpp" />
     <ClCompile Include="..\..\src\sf2_mapper.cpp" />
     <ClCompile Include="..\..\src\vgm_recorder.cpp" />
+    <ClCompile Include="..\..\src\trace_logger.cpp" />
     <ClCompile Include="..\shared\dependencies\libchdr\src\libchdr_bitstream.c">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
@@ -76,12 +82,14 @@
     </ClCompile>
     <ClCompile Include="..\shared\desktop\sound_queue.cpp" />
     <ClCompile Include="..\shared\desktop\application.cpp" />
+    <ClCompile Include="..\shared\desktop\application_headless.cpp" />
     <ClCompile Include="..\shared\desktop\config.cpp" />
     <ClCompile Include="..\shared\desktop\emu.cpp" />
     <ClCompile Include="..\shared\desktop\mcp\mcp_debug_adapter.cpp" />
     <ClCompile Include="..\shared\desktop\mcp\mcp_server.cpp" />
     <ClCompile Include="..\shared\desktop\single_instance.cpp" />
     <ClCompile Include="..\shared\desktop\gui_actions.cpp" />
+    <ClCompile Include="..\shared\desktop\rewind.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug_disassembler.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug_huc6202.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug_huc6260.cpp" />
@@ -97,6 +105,7 @@
     <ClCompile Include="..\shared\desktop\gui_debug_cdrom_audio.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug_adpcm.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug_trace_logger.cpp" />
+    <ClCompile Include="..\shared\desktop\gui_debug_rewind.cpp" />
     <ClCompile Include="..\shared\desktop\gui_debug.cpp" />
     <ClCompile Include="..\shared\desktop\gui_filedialogs.cpp" />
     <ClCompile Include="..\shared\desktop\gui_hes.cpp" />
@@ -135,6 +144,9 @@
     </ClCompile>
     <ClCompile Include="..\shared\desktop\main.cpp" />
     <ClCompile Include="..\shared\desktop\ogl_renderer.cpp" />
+    <ClCompile Include="..\shared\desktop\ogl_shader_program.cpp" />
+    <ClCompile Include="..\shared\desktop\ogl_shader_chain.cpp" />
+    <ClCompile Include="..\shared\desktop\shader_preset.cpp" />
     <ClCompile Include="..\shared\desktop\display.cpp" />
     <ClCompile Include="..\shared\desktop\events.cpp" />
     <ClCompile Include="..\shared\desktop\gamepad.cpp" />
@@ -143,6 +155,8 @@
     <ClInclude Include="..\..\src\arcade_card_mapper_inline.h" />
     <ClInclude Include="..\..\src\cdrom_chd_image.h" />
     <ClInclude Include="..\..\src\cdrom_cuebin_image.h" />
+    <ClInclude Include="..\..\src\cdrom_file.h" />
+    <ClInclude Include="..\..\src\cdrom_file_native.h" />
     <ClInclude Include="..\..\src\cdrom_image.h" />
     <ClInclude Include="..\..\src\crc.h" />
     <ClInclude Include="..\..\src\huc6202_inline.h" />
@@ -159,6 +173,8 @@
     <ClInclude Include="..\..\src\cdrom_media_inline.h" />
     <ClInclude Include="..\..\src\cdrom.h" />
     <ClInclude Include="..\..\src\cdrom_inline.h" />
+    <ClInclude Include="..\..\src\cdrom_drive.h" />
+    <ClInclude Include="..\..\src\cdrom_physical_image.h" />
     <ClInclude Include="..\..\src\cdrom_audio_inline.h" />
     <ClInclude Include="..\..\src\cdrom_audio.h" />
     <ClInclude Include="..\..\src\cdrom_common.h" />
@@ -194,6 +210,7 @@
     <ClInclude Include="..\..\src\huc6280.h" />
     <ClInclude Include="..\..\src\sf2_mapper.h" />
     <ClInclude Include="..\..\src\vgm_recorder.h" />
+    <ClInclude Include="..\..\src\trace_logger.h" />
     <ClInclude Include="..\..\src\types.h" />
     <ClInclude Include="..\shared\dependencies\glad\glad.h" />
     <ClInclude Include="..\shared\dependencies\libchdr\include\libchdr\bitstream.h" />
@@ -214,6 +231,7 @@
     <ClInclude Include="..\shared\desktop\sound_queue.h" />
     <ClInclude Include="..\shared\desktop\single_instance.h" />
     <ClInclude Include="..\shared\desktop\application.h" />
+    <ClInclude Include="..\shared\desktop\application_headless.h" />
     <ClInclude Include="..\shared\desktop\backers.h" />
     <ClInclude Include="..\shared\desktop\config.h" />
     <ClInclude Include="..\shared\desktop\console_utils.h" />
@@ -224,6 +242,7 @@
     <ClInclude Include="..\shared\desktop\mcp\mcp_server.h" />
     <ClInclude Include="..\shared\desktop\mcp\mcp_transport.h" />
     <ClInclude Include="..\shared\desktop\gui_actions.h" />
+    <ClInclude Include="..\shared\desktop\rewind.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_constants.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_disassembler.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_huc6202.h" />
@@ -241,6 +260,7 @@
     <ClInclude Include="..\shared\desktop\gui_debug_adpcm.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_text.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_trace_logger.h" />
+    <ClInclude Include="..\shared\desktop\gui_debug_rewind.h" />
     <ClInclude Include="..\shared\desktop\gui_debug_widgets.h" />
     <ClInclude Include="..\shared\desktop\gui_debug.h" />
     <ClInclude Include="..\shared\desktop\gui_filedialogs.h" />
@@ -265,6 +285,9 @@
     <ClInclude Include="..\shared\dependencies\mINI\ini.h" />
     <ClInclude Include="..\shared\dependencies\stb\stb_image_write.h" />
     <ClInclude Include="..\shared\desktop\ogl_renderer.h" />
+    <ClInclude Include="..\shared\desktop\ogl_shader_program.h" />
+    <ClInclude Include="..\shared\desktop\ogl_shader_chain.h" />
+    <ClInclude Include="..\shared\desktop\shader_preset.h" />
     <ClInclude Include="..\shared\desktop\display.h" />
     <ClInclude Include="..\shared\desktop\events.h" />
     <ClInclude Include="..\shared\desktop\gamepad.h" />
@@ -370,7 +393,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <Optimization>MaxSpeed</Optimization>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;UNICODE;WIN32;WIN64;NDEBUG;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;GG_ENABLE_PHYSICAL_CDROM;UNICODE;WIN32;WIN64;NDEBUG;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -411,7 +434,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <Optimization>MaxSpeed</Optimization>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;UNICODE;WIN32;WIN64;NDEBUG;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;GG_ENABLE_PHYSICAL_CDROM;UNICODE;WIN32;WIN64;NDEBUG;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -452,7 +475,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;DEBUG;UNICODE;WIN32;WIN64;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;DEBUG;GG_ENABLE_PHYSICAL_CDROM;UNICODE;WIN32;WIN64;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
@@ -492,7 +515,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;DEBUG;UNICODE;WIN32;WIN64;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;Z7_ST;DEBUG;GG_ENABLE_PHYSICAL_CDROM;UNICODE;WIN32;WIN64;EMULATOR_BUILD="$(EmulatorBuild)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>

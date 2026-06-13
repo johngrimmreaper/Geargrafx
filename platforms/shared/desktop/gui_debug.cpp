@@ -37,6 +37,7 @@
 #include "gui_debug_cdrom_audio.h"
 #include "gui_debug_adpcm.h"
 #include "gui_debug_trace_logger.h"
+#include "gui_debug_rewind.h"
 #include "emu.h"
 #include "config.h"
 
@@ -65,11 +66,6 @@ void gui_debug_reset(void)
     gui_debug_memory_reset();
     gui_debug_reset_breakpoints();
     gui_debug_reset_symbols();
-}
-
-void gui_debug_callback(void)
-{
-    gui_debug_trace_logger_update();
 }
 
 void gui_debug_windows(void)
@@ -129,6 +125,8 @@ void gui_debug_windows(void)
             gui_debug_window_arcade_card();
         if (config_debug.show_trace_logger)
             gui_debug_window_trace_logger();
+        if (config_debug.show_rewind)
+            gui_debug_window_rewind();
 
         gui_debug_memory_watches_window();
         gui_debug_memory_search_window();
@@ -136,7 +134,7 @@ void gui_debug_windows(void)
     }
 }
 
-static const char* GGDEBUG_MAGIC = "GGDEBUG2";
+static const char* GGDEBUG_MAGIC = "GGDEBUG3";
 static const int GGDEBUG_MAGIC_LEN = 8;
 
 void gui_debug_save_settings(const char* file_path)
@@ -153,16 +151,16 @@ void gui_debug_save_settings(const char* file_path)
     GeargrafxCore* core = emu_get_core();
     HuC6280* processor = core->GetHuC6280();
 
-    std::vector<HuC6280::GG_Breakpoint>* breakpoints = processor->GetBreakpoints();
+    const std::vector<HuC6280::GG_Breakpoint>* breakpoints = processor->GetBreakpoints();
     int bp_count = (int)breakpoints->size();
     file.write((const char*)&bp_count, sizeof(int));
     for (int i = 0; i < bp_count; i++)
     {
-        HuC6280::GG_Breakpoint& bp = (*breakpoints)[i];
+        const HuC6280::GG_Breakpoint& bp = (*breakpoints)[i];
         file.write((const char*)&bp.enabled, sizeof(bool));
         file.write((const char*)&bp.type, sizeof(int));
-        file.write((const char*)&bp.address1, sizeof(u16));
-        file.write((const char*)&bp.address2, sizeof(u16));
+        file.write((const char*)&bp.address1, sizeof(u32));
+        file.write((const char*)&bp.address2, sizeof(u32));
         file.write((const char*)&bp.read, sizeof(bool));
         file.write((const char*)&bp.write, sizeof(bool));
         file.write((const char*)&bp.execute, sizeof(bool));
@@ -203,6 +201,7 @@ void gui_debug_load_settings(const char* file_path)
 
     char magic[8];
     file.read(magic, GGDEBUG_MAGIC_LEN);
+
     if (memcmp(magic, GGDEBUG_MAGIC, GGDEBUG_MAGIC_LEN) != 0)
     {
         Log("Invalid debug settings file: %s", file_path);
@@ -216,20 +215,21 @@ void gui_debug_load_settings(const char* file_path)
     processor->ResetBreakpoints();
     int bp_count = 0;
     file.read((char*)&bp_count, sizeof(int));
-    std::vector<HuC6280::GG_Breakpoint>* breakpoints = processor->GetBreakpoints();
+    std::vector<HuC6280::GG_Breakpoint> breakpoints;
     for (int i = 0; i < bp_count; i++)
     {
-        HuC6280::GG_Breakpoint bp;
+        HuC6280::GG_Breakpoint bp{};
         file.read((char*)&bp.enabled, sizeof(bool));
         file.read((char*)&bp.type, sizeof(int));
-        file.read((char*)&bp.address1, sizeof(u16));
-        file.read((char*)&bp.address2, sizeof(u16));
+        file.read((char*)&bp.address1, sizeof(u32));
+        file.read((char*)&bp.address2, sizeof(u32));
         file.read((char*)&bp.read, sizeof(bool));
         file.read((char*)&bp.write, sizeof(bool));
         file.read((char*)&bp.execute, sizeof(bool));
         file.read((char*)&bp.range, sizeof(bool));
-        breakpoints->push_back(bp);
+        breakpoints.push_back(bp);
     }
+    processor->SetBreakpoints(breakpoints);
 
     file.read((char*)&emu_debug_irq_breakpoints, sizeof(bool));
 

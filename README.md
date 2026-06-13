@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/github/license/drhelius/Geargrafx)](https://github.com/drhelius/Geargrafx/blob/main/LICENSE)
 [![Twitter Follow](https://img.shields.io/twitter/follow/drhelius)](https://x.com/drhelius)
 
-Geargrafx is a very accurate cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / PCE CD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for debugging and tooling.
+Geargrafx is a very accurate, cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / PCE CD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for debugging and tooling.
 
 This is an open source project with its ongoing development made possible thanks to the support by these awesome [backers](backers.md). If you find it useful, please consider [sponsoring](https://github.com/sponsors/drhelius).
 
@@ -28,63 +28,52 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
   </thead>
   <tbody>
     <tr>
-      <td rowspan="4"><strong>Windows</strong></td>
+      <td rowspan="2"><strong>Windows</strong></td>
       <td>Desktop x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-windows-x64.zip">Geargrafx-1.7.1-desktop-windows-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-windows-x64.zip">Geargrafx-1.7.10-desktop-windows-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-windows-arm64.zip">Geargrafx-1.7.1-desktop-windows-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-windows-arm64.zip">Geargrafx-1.7.10-desktop-windows-arm64.zip</a></td>
     </tr>
     <tr>
-      <td>MCPB x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-windows-x64.mcpb">Geargrafx-1.7.1-mcpb-windows-x64.mcpb</a></td>
-    </tr>
-    <tr>
-      <td>MCPB ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-windows-arm64.mcpb">Geargrafx-1.7.1-mcpb-windows-arm64.mcpb</a></td>
-    </tr>
-    <tr>
-      <td rowspan="5"><strong>macOS</strong></td>
+      <td rowspan="3"><strong>macOS</strong></td>
       <td>Homebrew</td>
       <td><code>brew install --cask drhelius/geardome/geargrafx</code></td>
     </tr>
     <tr>
       <td>Desktop Apple Silicon</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-macos-arm64.zip">Geargrafx-1.7.1-desktop-macos-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-macos-arm64.zip">Geargrafx-1.7.10-desktop-macos-arm64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Intel</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-macos-intel.zip">Geargrafx-1.7.1-desktop-macos-intel.zip</a></td>
-    </tr>
-    <tr>
-      <td>MCPB x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-macos-x64.mcpb">Geargrafx-1.7.1-mcpb-macos-x64.mcpb</a></td>
-    </tr>
-    <tr>
-      <td>MCPB ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-macos-arm64.mcpb">Geargrafx-1.7.1-mcpb-macos-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-macos-intel.zip">Geargrafx-1.7.10-desktop-macos-intel.zip</a></td>
     </tr>
     <tr>
       <td rowspan="5"><strong>Linux</strong></td>
+      <td>Ubuntu PPA</td>
+      <td><a href="https://github.com/drhelius/ppa-geardome">drhelius/ppa-geardome</a></td>
+    </tr>
+    <tr>
+      <td>Fedora RPM</td>
+      <td><a href="https://github.com/drhelius/rpm-geardome">drhelius/rpm-geardome</a></td>
+    </tr>
+    <tr>
       <td>Desktop Ubuntu 24.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.1-desktop-ubuntu24.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.10-desktop-ubuntu24.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 22.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.1-desktop-ubuntu22.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.10-desktop-ubuntu22.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.1-desktop-ubuntu24.04-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.10-desktop-ubuntu24.04-arm64.zip</a></td>
     </tr>
     <tr>
-      <td>MCPB x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-linux-x64.mcpb">Geargrafx-1.7.1-mcpb-linux-x64.mcpb</a></td>
-    </tr>
-    <tr>
-      <td>MCPB ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.1/Geargrafx-1.7.1-mcpb-linux-arm64.mcpb">Geargrafx-1.7.1-mcpb-linux-arm64.mcpb</a></td>
+      <td><strong>MCPB</strong></td>
+      <td>All platforms</td>
+      <td><a href="MCP_README.md">MCP Readme</a></td>
     </tr>
     <tr>
       <td><strong>RetroArch</strong></td>
@@ -101,27 +90,30 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 
 **Notes:**
 - **Windows**: May need [Visual C++ Redistributable](https://go.microsoft.com/fwlink/?LinkId=746572) and [OpenGL Compatibility Pack](https://apps.microsoft.com/detail/9nqpsl29bfff)
+- **Homebrew**: If Homebrew asks you to trust the third-party tap, run `brew trust --tap drhelius/geardome`
 - **Linux**: May need `libsdl3`
 
 ## Features
 
 - Accurate emulation supporting the entire HuCard PCE / SGX catalog.
 - Support for CD-ROM², Super CD-ROM² and Arcade CD-ROM² systems.
-- Save states with preview.
+- Save states with preview and rewind support.
 - Backup RAM and Memory Base 128 support.
 - Multi Tap (up to 5 players).
-- Standard Gamepad (2 buttons), Avenue Pad 3 (3 buttons, auto-configured based on game), Avenue Pad 6 (6 buttons).
+- Standard Gamepad (2 buttons), Avenue Pad 3 (3 buttons, auto-configured based on game), Avenue Pad 6 (6 buttons) and Mouse.
 - Adjustable scanline count (224p, 240p or manual).
-- RGB or Composite color output.
-- Compressed rom and CD images support (pce, sgx, cue, zip and chd).
-- Music rom support: HES.
+- RGB or Composite color output with optional LPF filter.
+- Compressed ROM and CD image support (pce, sgx, cue, zip and chd).
+- Support for playing physical CD-ROM discs.
+- Music ROM support: HES.
 - VGM recorder.
-- Internal database for automatic rom detection and hardware selection if `Auto` options are selected.
+- Internal database for automatic ROM detection and hardware selection if `Auto` options are selected.
 - Supported platforms (standalone): Windows, Linux, BSD and macOS.
-- Supported platforms (libretro): Windows, Linux, macOS, Raspberry Pi, Android, iOS, tvOS, PlayStation Vita, PlayStation 3, Nintendo 3DS, Nintendo GameCube, Nintendo Wii, Nintendo WiiU, Nintendo Switch, Emscripten, Classic Mini systems (NES, SNES, C64, ...), OpenDingux, RetroFW and QNX.
+- Supported platforms (libretro): Windows, Linux, macOS, Raspberry Pi, Android, iOS, tvOS, webOS, PlayStation Vita, PlayStation 3, Nintendo 3DS, Nintendo GameCube, Nintendo Wii, Nintendo WiiU, Nintendo Switch, Emscripten, Classic Mini systems (NES, SNES, C64, ...), OpenDingux, RetroFW and QNX.
 - Full debugger with just-in-time disassembler, CPU breakpoints, memory access breakpoints, code navigation (goto address, JP JR and JSR double clicking), debug symbols, automatic labels, memory editor, PSG inspector and video viewer including registers, tiles, sprites, backgrounds, CD-ROM sub-systems and both VDCs in SuperGrafx mode.
-- MCP server for AI-assisted debugging with GitHub Copilot, Claude, ChatGPT and similar, exposing tools for execution control, memory inspection, hardware status, and more.
+- MCP server for AI-assisted debugging with GitHub Copilot, Claude, Codex and similar, exposing tools for execution control, memory inspection, hardware status, rewind and more.
 - Windows and Linux *Portable Mode*.
+- [Programmable Shader Chain](platforms/shared/desktop/shaders/README.md).
 - ROM loading from the command line by adding the ROM path as an argument.
 - ROM loading using drag & drop.
 - Support for modern game controllers through [gamecontrollerdb.txt](https://github.com/mdqinc/SDL_GameControllerDB) file located in the same directory as the application binary.
@@ -129,7 +121,7 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 ## Tips
 
 ### Basic Usage
-- **BIOS**: Geargrafx requires a BIOS to run CD-ROM games. It is possible to load any BIOS but the System Card 3.0 with md5 ```38179df8f4ac870017db21ebcbf53114``` is recommended.
+- **BIOS**: Geargrafx requires a BIOS to run CD-ROM games. It is possible to load any BIOS but the System Card 3.0 with md5 `38179df8f4ac870017db21ebcbf53114` is recommended.
 - **CD-ROM Images**: Geargrafx supports `chd`, zipped and unzipped `cue/bin`, `cue/img` and `cue/iso` images. `cue/iso + wav` is also supported when audio track format is 44100Hz, 16 bit, stereo. It does not support MP3 or OGG audio tracks.
 - **Mouse Cursor**: Automatically hides when hovering over the main output window or when Main Menu is disabled.
 - **Portable Mode**: Create an empty file named `portable.ini` in the same directory as the application binary to enable portable mode.
@@ -137,8 +129,8 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 ### Debugging Features
 - **Docking Windows**: In debug mode, you can dock windows together by pressing SHIFT and dragging a window onto another.
 - **Multi-viewport**: In Windows or macOS, you can enable "multi-viewport" in the debug menu. You must restart the emulator for the change to take effect. Once enabled, you can drag debugger windows outside the main window.
-- **Single Instance**: You can enable "Single Instance" in the ```Emulator``` menu. When enabled, opening a ROM while another instance is running will send the ROM to the running instance instead of starting a new one.
-- **Debug Symbols**: The emulator automatically tries to load a symbol file when loading a ROM (.sym, .lbl, .noi). For example, for ```path_to_rom_file.rom``` it tries to load ```path_to_rom_file.sym```. You can also load symbol files using the GUI or the CLI. It supports PCEAS (old and new format), wla-dx and vasm file formats.
+- **Single Instance**: You can enable "Single Instance" in the `Emulator` menu. When enabled, opening a ROM while another instance is running will send the ROM to the running instance instead of starting a new one.
+- **Debug Symbols**: The emulator automatically tries to load a symbol file when loading a ROM (.sym, .lbl, .noi). For example, for `path_to_rom_file.rom` it tries to load `path_to_rom_file.sym`. You can also load symbol files using the GUI or the CLI. It supports PCEAS (old and new format), wla-dx and vasm file formats.
 
 ### Command Line Usage
 ```
@@ -154,15 +146,25 @@ Options:
       --mcp-stdio          Auto-start MCP server with stdio transport
       --mcp-http           Auto-start MCP server with HTTP transport
       --mcp-http-port N    HTTP port for MCP server (default: 7777)
+      --headless           Run without GUI (requires --mcp-stdio or --mcp-http)
   -v, --version            Display version information
   -h, --help               Display this help message
 ```
 
 ### MCP Server
 
-Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, ChatGPT and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, sprite viewing, and more.
+Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more.
 
 For complete setup instructions and tool documentation, see [MCP_README.md](MCP_README.md).
+
+### Agent Skills
+
+Geargrafx provides [Agent Skills](https://agentskills.io/) that teach AI assistants how to effectively use the emulator for specific tasks:
+
+- **[geargrafx-debugging](skills/geargrafx-debugging/SKILL.md)** — Game debugging, code tracing, breakpoint management, hardware inspection, and reverse engineering.
+- **[geargrafx-romhacking](skills/geargrafx-romhacking/SKILL.md)** — Cheat creation, memory searching, ROM data modification, text translation, and game patching.
+
+Install with `npx skills add drhelius/geargrafx`. See the [skills README](skills/README.md) for details.
 
 ## Build Instructions
 
@@ -192,7 +194,7 @@ make dist
 If you are using Ubuntu 25.04 or later, you can install SDL3 directly. Use the following commands to build:
 
 ``` shell
-sudo apt install build-essential libsdl3-dev libgtk-3-dev
+sudo apt install build-essential libsdl3-dev
 cd platforms/linux
 make
 ```
@@ -200,8 +202,12 @@ make
 For older Ubuntu versions (22.04, 24.04), you need to build SDL3 from source first. Use the following commands to build both SDL3 and Geargrafx:
 
 ``` shell
-sudo apt install build-essential cmake libgtk-3-dev
-git clone --depth 1 --branch release-3.4.x https://github.com/libsdl-org/SDL.git /tmp/SDL3
+sudo apt install build-essential cmake git curl jq pkg-config \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+  libxi-dev libxss-dev libxkbcommon-dev libwayland-dev libdecor-0-dev \
+  libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev libxtst-dev
+SDL3_TAG=$(curl -s https://api.github.com/repos/libsdl-org/SDL/releases/latest | jq -r '.tag_name')
+git clone --depth 1 --branch "$SDL3_TAG" https://github.com/libsdl-org/SDL.git /tmp/SDL3
 cmake -S /tmp/SDL3 -B /tmp/SDL3/build -DCMAKE_INSTALL_PREFIX=/usr -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
 cmake --build /tmp/SDL3/build -j$(nproc)
 sudo cmake --install /tmp/SDL3/build
@@ -212,7 +218,7 @@ make
 - Fedora:
 
 ``` shell
-sudo dnf install @development-tools gcc-c++ SDL3-devel gtk3-devel
+sudo dnf install @development-tools gcc-c++ SDL3-devel
 cd platforms/linux
 make
 ```
@@ -220,7 +226,7 @@ make
 - Arch Linux:
 
 ``` shell
-sudo pacman -S base-devel sdl3 gtk3
+sudo pacman -S base-devel sdl3
 cd platforms/linux
 make
 ```
@@ -230,17 +236,25 @@ make
 - FreeBSD:
 
 ``` shell
-su root -c "pkg install -y git gmake pkgconf SDL3 lang/gcc gtk3"
+su root -c "pkg install -y git gmake pkgconf sdl3"
 cd platforms/bsd
-gmake
+USE_CLANG=1 gmake
 ```
 
 - NetBSD:
 
 ``` shell
-su root -c "pkgin install gmake pkgconf SDL3 lang/gcc gtk3"
+su root -c "pkgin install gmake pkgconf SDL3"
 cd platforms/bsd
 gmake
+```
+
+- OpenBSD
+
+``` shell
+doas pkg_add gmake sdl3
+cd platforms/bsd
+LDFLAGS=-L/usr/X11R6/lib/ USE_CLANG=1 gmake
 ```
 
 ### Libretro

@@ -26,6 +26,8 @@
 
 #define CONFIG_IMPORT
 #include "config.h"
+#include "shader_preset.h"
+#include "utils.h"
 
 static bool check_portable(void);
 static int read_int(const char* group, const char* key, int default_value);
@@ -39,6 +41,9 @@ static void write_string(const char* group, const char* key, const std::string& 
 static config_Hotkey read_hotkey(const char* group, const char* key, config_Hotkey default_value);
 static void write_hotkey(const char* group, const char* key, config_Hotkey hotkey);
 static config_Hotkey make_hotkey(SDL_Scancode key, SDL_Keymod mod);
+static std::string shader_preset_section_name(const char* preset_file);
+static bool parse_float_string(const std::string& value, float* result);
+static void sync_shader_preset_parameter_defaults(void);
 static void set_defaults(void);
 
 static void set_defaults(void)
@@ -46,6 +51,7 @@ static void set_defaults(void)
     config_emulator = config_Emulator();
     config_video = config_Video();
     config_audio = config_Audio();
+    config_rewind = config_Rewind();
     config_input = config_Input();
     config_debug = config_Debug();
 
@@ -135,6 +141,7 @@ static void set_defaults(void)
     config_hotkeys[config_HotkeyIndex_Reset] = make_hotkey(SDL_SCANCODE_R, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_Pause] = make_hotkey(SDL_SCANCODE_P, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_FFWD] = make_hotkey(SDL_SCANCODE_F, SDL_KMOD_CTRL);
+    config_hotkeys[config_HotkeyIndex_Rewind] = make_hotkey(SDL_SCANCODE_BACKSPACE, SDL_KMOD_NONE);
     config_hotkeys[config_HotkeyIndex_SaveState] = make_hotkey(SDL_SCANCODE_S, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_LoadState] = make_hotkey(SDL_SCANCODE_L, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_Screenshot] = make_hotkey(SDL_SCANCODE_X, SDL_KMOD_CTRL);
@@ -154,6 +161,8 @@ static void set_defaults(void)
     config_hotkeys[config_HotkeyIndex_SelectSlot3] = make_hotkey(SDL_SCANCODE_3, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_SelectSlot4] = make_hotkey(SDL_SCANCODE_4, SDL_KMOD_CTRL);
     config_hotkeys[config_HotkeyIndex_SelectSlot5] = make_hotkey(SDL_SCANCODE_5, SDL_KMOD_CTRL);
+    config_hotkeys[config_HotkeyIndex_CaptureMouse] = make_hotkey(SDL_SCANCODE_F1, SDL_KMOD_NONE);
+    config_hotkeys[config_HotkeyIndex_Mute] = make_hotkey(SDL_SCANCODE_U, SDL_KMOD_CTRL);
 }
 
 void config_init(void)
@@ -200,6 +209,29 @@ void config_load_defaults(void)
 
     set_defaults();
     config_write();
+}
+
+void config_push_recent_media(const std::string& path)
+{
+    if (path.empty())
+        return;
+
+    int slot = 0;
+    for (slot = 0; slot < config_max_recent_roms; slot++)
+    {
+        if (config_emulator.recent_roms[slot].compare(path) == 0)
+            break;
+    }
+
+    if (slot >= config_max_recent_roms)
+        slot = config_max_recent_roms - 1;
+
+    for (int index = slot; index > 0; index--)
+    {
+        config_emulator.recent_roms[index] = config_emulator.recent_roms[index - 1];
+    }
+
+    config_emulator.recent_roms[0] = path;
 }
 
 void config_read(void)
@@ -252,11 +284,22 @@ void config_read(void)
     config_debug.show_adpcm = read_bool("Debug", "ADPCM", false);
     config_debug.show_arcade_card = read_bool("Debug", "ArcadeCard", false);
     config_debug.show_trace_logger = read_bool("Debug", "TraceLogger", false);
+    config_debug.show_rewind = read_bool("Debug", "Rewind", false);
     config_debug.trace_counter = read_bool("Debug", "TraceCounter", true);
     config_debug.trace_bank = read_bool("Debug", "TraceBank", true);
     config_debug.trace_registers = read_bool("Debug", "TraceRegisters", true);
     config_debug.trace_flags = read_bool("Debug", "TraceFlags", true);
     config_debug.trace_bytes = read_bool("Debug", "TraceBytes", true);
+    config_debug.trace_cpu = read_bool("Debug", "TraceCpu", true);
+    config_debug.trace_cpu_irq = read_bool("Debug", "TraceCpuIrq", true);
+    config_debug.trace_vdc = read_bool("Debug", "TraceVdc", true);
+    config_debug.trace_input = read_bool("Debug", "TraceInput", true);
+    config_debug.trace_timer = read_bool("Debug", "TraceTimer", true);
+    config_debug.trace_cdrom = read_bool("Debug", "TraceCdrom", true);
+    config_debug.trace_psg = read_bool("Debug", "TracePsg", true);
+    config_debug.trace_adpcm = read_bool("Debug", "TraceAdpcm", true);
+    config_debug.trace_vce = read_bool("Debug", "TraceVce", true);
+    config_debug.trace_scsi = read_bool("Debug", "TraceScsi", true);
     config_debug.dis_show_mem = read_bool("Debug", "DisMem", true);
     config_debug.dis_show_symbols = read_bool("Debug", "DisSymbols", true);
     config_debug.dis_show_segment = read_bool("Debug", "DisSegment", true);
@@ -267,7 +310,7 @@ void config_read(void)
     config_debug.dis_replace_labels = read_bool("Debug", "DisReplaceLabels", true);
     config_debug.dis_look_ahead_count = read_int("Debug", "DisLookAheadCount", 20);
     config_debug.font_size = read_int("Debug", "FontSize", 0);
-    config_debug.scale = read_int("Debug", "Scale", 1);
+    config_debug.scale = read_int("Debug", "Scale", 2);
     config_debug.multi_viewport = read_bool("Debug", "MultiViewport", false);
     config_debug.single_instance = read_bool("Debug", "SingleInstance", false);
     config_debug.auto_debug_settings = read_bool("Debug", "AutoDebugSettings", false);
@@ -290,8 +333,10 @@ void config_read(void)
 
     config_emulator.maximized = read_bool("Emulator", "Maximized", false);
     config_emulator.fullscreen = read_bool("Emulator", "FullScreen", false);
-    config_emulator.fullscreen_mode = read_int("Emulator", "FullScreenMode", 1);
+    config_emulator.fullscreen_mode = read_int("Emulator", "FullScreenMode", 0);
     config_emulator.always_show_menu = read_bool("Emulator", "AlwaysShowMenu", false);
+    config_emulator.theme = read_int("Emulator", "Theme", config_Theme_Dark);
+    config_emulator.theme = CLAMP(config_emulator.theme, config_Theme_Light, config_Theme_Dark);
     config_emulator.ffwd_speed = read_int("Emulator", "FFWD", 1);
     config_emulator.save_slot = read_int("Emulator", "SaveSlot", 0);
     config_emulator.start_paused = read_bool("Emulator", "StartPaused", false);
@@ -359,37 +404,54 @@ void config_read(void)
     config_video.scanline_end = read_int("Video", "ScanlineEnd", 234);
     config_video.palette = read_int("Video", "Palette", 0);
     config_video.fps = read_bool("Video", "FPS", false);
-    config_video.bilinear = read_bool("Video", "Bilinear", false);
     config_video.sprite_limit = read_bool("Video", "SpriteLimit", false);
     config_video.safe_vdc_defaults = read_bool("Video", "SafeVdcDefaults", false);
-    config_video.mix_frames = read_bool("Video", "MixFrames", true);
-    config_video.mix_frames_intensity = read_float("Video", "MixFramesIntensity", 0.50f);
-    config_video.scanlines = read_bool("Video", "Scanlines", true);
-    config_video.scanlines_filter = read_bool("Video", "ScanlinesFilter", false);
-    config_video.scanlines_intensity = read_float("Video", "ScanlinesIntensity", 0.10f);
     config_video.lowpass_filter = read_bool("Video", "LowpassFilter", true);
     config_video.lowpass_intensity = read_float("Video", "LowpassIntensity", 1.0f);
     config_video.lowpass_cutoff_mhz = read_float("Video", "LowpassCutoffMhz", 5.0f);
     config_video.lowpass_speed[0] = read_bool("Video", "LowpassSpeed536", false);
     config_video.lowpass_speed[1] = read_bool("Video", "LowpassSpeed716", true);
     config_video.lowpass_speed[2] = read_bool("Video", "LowpassSpeed108", true);
+    config_video.shader_mode = read_int("Video", "ShaderMode", config_ShaderMode_PixelPerfect);
+    config_video.shader_mode = CLAMP(config_video.shader_mode, config_ShaderMode_PixelPerfect, config_ShaderMode_External);
+    config_video.shader_preset_path = read_string("Video", "ShaderPresetFile");
     config_video.sync = read_bool("Video", "Sync", true);
-    config_video.background_color[0] = read_float("Video", "BackgroundColorR", 0.1f);
-    config_video.background_color[1] = read_float("Video", "BackgroundColorG", 0.1f);
-    config_video.background_color[2] = read_float("Video", "BackgroundColorB", 0.1f);
-    config_video.background_color_debugger[0] = read_float("Video", "BackgroundColorDebuggerR", 0.2f);
-    config_video.background_color_debugger[1] = read_float("Video", "BackgroundColorDebuggerG", 0.2f);
-    config_video.background_color_debugger[2] = read_float("Video", "BackgroundColorDebuggerB", 0.2f);
+    config_video.background_color[config_Theme_Dark][0] = read_float("Video", "BackgroundColorR", 0.1f);
+    config_video.background_color[config_Theme_Dark][1] = read_float("Video", "BackgroundColorG", 0.1f);
+    config_video.background_color[config_Theme_Dark][2] = read_float("Video", "BackgroundColorB", 0.1f);
+    config_video.background_color_debugger[config_Theme_Dark][0] = read_float("Video", "BackgroundColorDebuggerR", 0.2f);
+    config_video.background_color_debugger[config_Theme_Dark][1] = read_float("Video", "BackgroundColorDebuggerG", 0.2f);
+    config_video.background_color_debugger[config_Theme_Dark][2] = read_float("Video", "BackgroundColorDebuggerB", 0.2f);
+    config_video.background_color[config_Theme_Light][0] = read_float("Video", "BackgroundColorLightR", 128.0f / 255.0f);
+    config_video.background_color[config_Theme_Light][1] = read_float("Video", "BackgroundColorLightG", 128.0f / 255.0f);
+    config_video.background_color[config_Theme_Light][2] = read_float("Video", "BackgroundColorLightB", 128.0f / 255.0f);
+    config_video.background_color_debugger[config_Theme_Light][0] = read_float("Video", "BackgroundColorDebuggerLightR", 160.0f / 255.0f);
+    config_video.background_color_debugger[config_Theme_Light][1] = read_float("Video", "BackgroundColorDebuggerLightG", 160.0f / 255.0f);
+    config_video.background_color_debugger[config_Theme_Light][2] = read_float("Video", "BackgroundColorDebuggerLightB", 160.0f / 255.0f);
 
     config_audio.enable = read_bool("Audio", "Enable", true);
     config_audio.sync = read_bool("Audio", "Sync", true);
     config_audio.huc6280a = read_bool("Audio", "HuC6280A", true);
+    config_audio.master_volume = read_float("Audio", "MasterVolume", 1.0f);
+    config_audio.master_volume = CLAMP(config_audio.master_volume, 0.0f, 2.0f);
     config_audio.psg_volume = read_float("Audio", "PSGVolume", 1.0f);
     config_audio.cdrom_volume = read_float("Audio", "CDROMVolume", 1.0f);
     config_audio.adpcm_volume = read_float("Audio", "ADPCMVolume", 1.0f);
     config_audio.buffer_count = read_int("Audio", "BufferCount", 3);
 
+    config_rewind.enabled = read_bool("Rewind", "Enabled", true);
+    config_rewind.buffer_seconds = read_int("Rewind", "BufferSeconds", 10);
+    config_rewind.buffer_seconds = CLAMP(config_rewind.buffer_seconds, 1, 10);
+    config_rewind.frames_per_snapshot = read_int("Rewind", "FramesPerSnapshot", 1);
+    if (config_rewind.frames_per_snapshot < 1)
+        config_rewind.frames_per_snapshot = 1;
+    config_rewind.speed = read_float("Rewind", "Speed", 2.0f);
+    config_rewind.speed = CLAMP(config_rewind.speed, 1.0f, 8.0f);
+
     config_input.turbo_tap = read_bool("Input", "TurboTap", false);
+    config_input.allow_up_down = read_bool("Input", "AllowUpDown", false);
+    config_emulator.capture_mouse = read_bool("Input", "CaptureMouse", false);
+    config_emulator.mouse_sensitivity = CLAMP(read_int("Input", "MouseSensitivity", 5), 1, 15);
 
     for (int i = 0; i < GG_MAX_GAMEPADS; i++)
     {
@@ -474,8 +536,8 @@ void config_read(void)
         config_input_gamepad[i].gamepad_IV = read_int(input_group, "GamepadIV", SDL_GAMEPAD_BUTTON_NORTH);
         config_input_gamepad[i].gamepad_V = read_int(input_group, "GamepadV", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
         config_input_gamepad[i].gamepad_VI = read_int(input_group, "GamepadVI", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-        config_input_gamepad[i].gamepad_toggle_turbo_I = read_int(input_group, "GamepadToogleTurboI", SDL_GAMEPAD_BUTTON_LEFT_STICK);
-        config_input_gamepad[i].gamepad_toggle_turbo_II = read_int(input_group, "GamepadToogleTurboII", SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        config_input_gamepad[i].gamepad_toggle_turbo_I = read_int(input_group, "GamepadToogleTurboI", SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        config_input_gamepad[i].gamepad_toggle_turbo_II = read_int(input_group, "GamepadToogleTurboII", SDL_GAMEPAD_BUTTON_LEFT_STICK);
     }
 
     for (int i = 0; i < GG_MAX_GAMEPADS; i++)
@@ -497,6 +559,7 @@ void config_read(void)
     config_hotkeys[config_HotkeyIndex_Reset] = read_hotkey("Hotkeys", "Reset", make_hotkey(SDL_SCANCODE_R, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_Pause] = read_hotkey("Hotkeys", "Pause", make_hotkey(SDL_SCANCODE_P, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_FFWD] = read_hotkey("Hotkeys", "FFWD", make_hotkey(SDL_SCANCODE_F, SDL_KMOD_CTRL));
+    config_hotkeys[config_HotkeyIndex_Rewind] = read_hotkey("Hotkeys", "Rewind", make_hotkey(SDL_SCANCODE_BACKSPACE, SDL_KMOD_NONE));
     config_hotkeys[config_HotkeyIndex_SaveState] = read_hotkey("Hotkeys", "SaveState", make_hotkey(SDL_SCANCODE_S, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_LoadState] = read_hotkey("Hotkeys", "LoadState", make_hotkey(SDL_SCANCODE_L, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_Screenshot] = read_hotkey("Hotkeys", "Screenshot", make_hotkey(SDL_SCANCODE_X, SDL_KMOD_CTRL));
@@ -516,6 +579,9 @@ void config_read(void)
     config_hotkeys[config_HotkeyIndex_SelectSlot3] = read_hotkey("Hotkeys", "SelectSlot3", make_hotkey(SDL_SCANCODE_3, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_SelectSlot4] = read_hotkey("Hotkeys", "SelectSlot4", make_hotkey(SDL_SCANCODE_4, SDL_KMOD_CTRL));
     config_hotkeys[config_HotkeyIndex_SelectSlot5] = read_hotkey("Hotkeys", "SelectSlot5", make_hotkey(SDL_SCANCODE_5, SDL_KMOD_CTRL));
+    config_hotkeys[config_HotkeyIndex_Mute] = read_hotkey("Hotkeys", "Mute", make_hotkey(SDL_SCANCODE_U, SDL_KMOD_CTRL));
+
+    sync_shader_preset_parameter_defaults();
 
     Debug("Settings loaded");
 }
@@ -556,11 +622,22 @@ void config_write(void)
     write_bool("Debug", "ADPCM", config_debug.show_adpcm);
     write_bool("Debug", "ArcadeCard", config_debug.show_arcade_card);
     write_bool("Debug", "TraceLogger", config_debug.show_trace_logger);
+    write_bool("Debug", "Rewind", config_debug.show_rewind);
     write_bool("Debug", "TraceCounter", config_debug.trace_counter);
     write_bool("Debug", "TraceBank", config_debug.trace_bank);
     write_bool("Debug", "TraceRegisters", config_debug.trace_registers);
     write_bool("Debug", "TraceFlags", config_debug.trace_flags);
     write_bool("Debug", "TraceBytes", config_debug.trace_bytes);
+    write_bool("Debug", "TraceCpu", config_debug.trace_cpu);
+    write_bool("Debug", "TraceCpuIrq", config_debug.trace_cpu_irq);
+    write_bool("Debug", "TraceVdc", config_debug.trace_vdc);
+    write_bool("Debug", "TraceInput", config_debug.trace_input);
+    write_bool("Debug", "TraceTimer", config_debug.trace_timer);
+    write_bool("Debug", "TraceCdrom", config_debug.trace_cdrom);
+    write_bool("Debug", "TracePsg", config_debug.trace_psg);
+    write_bool("Debug", "TraceAdpcm", config_debug.trace_adpcm);
+    write_bool("Debug", "TraceVce", config_debug.trace_vce);
+    write_bool("Debug", "TraceScsi", config_debug.trace_scsi);
     write_bool("Debug", "DisMem", config_debug.dis_show_mem);
     write_bool("Debug", "DisSymbols", config_debug.dis_show_symbols);
     write_bool("Debug", "DisSegment", config_debug.dis_show_segment);
@@ -596,6 +673,7 @@ void config_write(void)
     write_bool("Emulator", "FullScreen", config_emulator.fullscreen);
     write_int("Emulator", "FullScreenMode", config_emulator.fullscreen_mode);
     write_bool("Emulator", "AlwaysShowMenu", config_emulator.always_show_menu);
+    write_int("Emulator", "Theme", config_emulator.theme);
     write_int("Emulator", "FFWD", config_emulator.ffwd_speed);
     write_int("Emulator", "SaveSlot", config_emulator.save_slot);
     write_bool("Emulator", "StartPaused", config_emulator.start_paused);
@@ -638,37 +716,49 @@ void config_write(void)
     write_int("Video", "ScanlineEnd", config_video.scanline_end);
     write_int("Video", "Palette", config_video.palette);
     write_bool("Video", "FPS", config_video.fps);
-    write_bool("Video", "Bilinear", config_video.bilinear);
     write_bool("Video", "SpriteLimit", config_video.sprite_limit);
     write_bool("Video", "SafeVdcDefaults", config_video.safe_vdc_defaults);
-    write_bool("Video", "MixFrames", config_video.mix_frames);
-    write_float("Video", "MixFramesIntensity", config_video.mix_frames_intensity);
-    write_bool("Video", "Scanlines", config_video.scanlines);
-    write_bool("Video", "ScanlinesFilter", config_video.scanlines_filter);
-    write_float("Video", "ScanlinesIntensity", config_video.scanlines_intensity);
     write_bool("Video", "LowpassFilter", config_video.lowpass_filter);
     write_float("Video", "LowpassIntensity", config_video.lowpass_intensity);
     write_float("Video", "LowpassCutoffMhz", config_video.lowpass_cutoff_mhz);
     write_bool("Video", "LowpassSpeed536", config_video.lowpass_speed[0]);
     write_bool("Video", "LowpassSpeed716", config_video.lowpass_speed[1]);
     write_bool("Video", "LowpassSpeed108", config_video.lowpass_speed[2]);
+    write_int("Video", "ShaderMode", config_video.shader_mode);
+    write_string("Video", "ShaderPresetFile", get_filename(config_video.shader_preset_path.c_str()));
+    sync_shader_preset_parameter_defaults();
     write_bool("Video", "Sync", config_video.sync);
-    write_float("Video", "BackgroundColorR", config_video.background_color[0]);
-    write_float("Video", "BackgroundColorG", config_video.background_color[1]);
-    write_float("Video", "BackgroundColorB", config_video.background_color[2]);
-    write_float("Video", "BackgroundColorDebuggerR", config_video.background_color_debugger[0]);
-    write_float("Video", "BackgroundColorDebuggerG", config_video.background_color_debugger[1]);
-    write_float("Video", "BackgroundColorDebuggerB", config_video.background_color_debugger[2]);
+    write_float("Video", "BackgroundColorR", config_video.background_color[config_Theme_Dark][0]);
+    write_float("Video", "BackgroundColorG", config_video.background_color[config_Theme_Dark][1]);
+    write_float("Video", "BackgroundColorB", config_video.background_color[config_Theme_Dark][2]);
+    write_float("Video", "BackgroundColorDebuggerR", config_video.background_color_debugger[config_Theme_Dark][0]);
+    write_float("Video", "BackgroundColorDebuggerG", config_video.background_color_debugger[config_Theme_Dark][1]);
+    write_float("Video", "BackgroundColorDebuggerB", config_video.background_color_debugger[config_Theme_Dark][2]);
+    write_float("Video", "BackgroundColorLightR", config_video.background_color[config_Theme_Light][0]);
+    write_float("Video", "BackgroundColorLightG", config_video.background_color[config_Theme_Light][1]);
+    write_float("Video", "BackgroundColorLightB", config_video.background_color[config_Theme_Light][2]);
+    write_float("Video", "BackgroundColorDebuggerLightR", config_video.background_color_debugger[config_Theme_Light][0]);
+    write_float("Video", "BackgroundColorDebuggerLightG", config_video.background_color_debugger[config_Theme_Light][1]);
+    write_float("Video", "BackgroundColorDebuggerLightB", config_video.background_color_debugger[config_Theme_Light][2]);
 
     write_bool("Audio", "Enable", config_audio.enable);
     write_bool("Audio", "Sync", config_audio.sync);
     write_bool("Audio", "HuC6280A", config_audio.huc6280a);
+    write_float("Audio", "MasterVolume", config_audio.master_volume);
     write_float("Audio", "PSGVolume", config_audio.psg_volume);
     write_float("Audio", "CDROMVolume", config_audio.cdrom_volume);
     write_float("Audio", "ADPCMVolume", config_audio.adpcm_volume);
     write_int("Audio", "BufferCount", config_audio.buffer_count);
 
+    write_bool("Rewind", "Enabled", config_rewind.enabled);
+    write_int("Rewind", "BufferSeconds", config_rewind.buffer_seconds);
+    write_int("Rewind", "FramesPerSnapshot", config_rewind.frames_per_snapshot);
+    write_float("Rewind", "Speed", config_rewind.speed);
+
     write_bool("Input", "TurboTap", config_input.turbo_tap);
+    write_bool("Input", "AllowUpDown", config_input.allow_up_down);
+    write_bool("Input", "CaptureMouse", config_emulator.capture_mouse);
+    write_int("Input", "MouseSensitivity", config_emulator.mouse_sensitivity);
 
     for (int i = 0; i < GG_MAX_GAMEPADS; i++)
     {
@@ -768,6 +858,7 @@ void config_write(void)
     write_hotkey("Hotkeys", "Reset", config_hotkeys[config_HotkeyIndex_Reset]);
     write_hotkey("Hotkeys", "Pause", config_hotkeys[config_HotkeyIndex_Pause]);
     write_hotkey("Hotkeys", "FFWD", config_hotkeys[config_HotkeyIndex_FFWD]);
+    write_hotkey("Hotkeys", "Rewind", config_hotkeys[config_HotkeyIndex_Rewind]);
     write_hotkey("Hotkeys", "SaveState", config_hotkeys[config_HotkeyIndex_SaveState]);
     write_hotkey("Hotkeys", "LoadState", config_hotkeys[config_HotkeyIndex_LoadState]);
     write_hotkey("Hotkeys", "Screenshot", config_hotkeys[config_HotkeyIndex_Screenshot]);
@@ -787,6 +878,7 @@ void config_write(void)
     write_hotkey("Hotkeys", "SelectSlot3", config_hotkeys[config_HotkeyIndex_SelectSlot3]);
     write_hotkey("Hotkeys", "SelectSlot4", config_hotkeys[config_HotkeyIndex_SelectSlot4]);
     write_hotkey("Hotkeys", "SelectSlot5", config_hotkeys[config_HotkeyIndex_SelectSlot5]);
+    write_hotkey("Hotkeys", "Mute", config_hotkeys[config_HotkeyIndex_Mute]);
 
     if (config_ini_file->write(config_ini_data, true))
     {
@@ -934,6 +1026,78 @@ static void write_hotkey(const char* group, const char* key, config_Hotkey hotke
 
     write_int(group, scancode_key.c_str(), hotkey.key);
     write_int(group, mod_key.c_str(), hotkey.mod);
+}
+
+static std::string shader_preset_section_name(const char* preset_file)
+{
+    return std::string("ShaderPreset.") + get_filename(preset_file);
+}
+
+static bool parse_float_string(const std::string& value, float* result)
+{
+    if (value.empty() || !result)
+        return false;
+
+    char* end = NULL;
+    float parsed = strtof(value.c_str(), &end);
+    if (end == value.c_str())
+        return false;
+
+    *result = parsed;
+    return true;
+}
+
+bool config_read_shader_parameter(const char* preset_file, const char* parameter_name, float* value)
+{
+    if (!preset_file || preset_file[0] == '\0' || !parameter_name || parameter_name[0] == '\0' || !value)
+        return false;
+
+    std::string section = shader_preset_section_name(preset_file);
+    if (!config_ini_data.has(section))
+        return false;
+
+    mINI::INIMap<std::string> parameters = config_ini_data.get(section);
+    if (!parameters.has(parameter_name))
+        return false;
+
+    return parse_float_string(parameters.get(parameter_name), value);
+}
+
+void config_write_shader_parameter(const char* preset_file, const char* parameter_name, float value)
+{
+    if (!preset_file || preset_file[0] == '\0' || !parameter_name || parameter_name[0] == '\0')
+        return;
+
+    std::string section = shader_preset_section_name(preset_file);
+    write_float(section.c_str(), parameter_name, value);
+}
+
+static void sync_shader_preset_parameter_defaults(void)
+{
+    ShaderPresetInfo presets[SHADER_PRESET_MAX_DISCOVERED];
+    int preset_count = shader_preset_scan_bundled(presets, SHADER_PRESET_MAX_DISCOVERED);
+
+    for (int i = 0; i < preset_count; i++)
+    {
+        ShaderPreset preset;
+        char error[512];
+        if (!shader_preset_load(presets[i].path, &preset, error, sizeof(error)))
+            continue;
+
+        char preset_file[SHADER_PRESET_MAX_PATH];
+        if (!shader_preset_get_config_path(preset.preset_path, preset_file, sizeof(preset_file)))
+            continue;
+
+        std::string section = shader_preset_section_name(preset_file);
+        for (int j = 0; j < preset.parameter_count; j++)
+        {
+            ShaderPresetParameter* parameter = &preset.parameters[j];
+            if (config_ini_data[section].has(parameter->name))
+                continue;
+
+            write_float(section.c_str(), parameter->name, parameter->default_value);
+        }
+    }
 }
 
 static config_Hotkey make_hotkey(SDL_Scancode key, SDL_Keymod mod)

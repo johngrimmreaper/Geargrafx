@@ -57,6 +57,7 @@ enum FileDialogID
     FileDialog_SaveBackground,
     FileDialog_SaveMemoryDumpBinary,
     FileDialog_SaveMemoryDumpText,
+    FileDialog_LoadMemoryDumpBinary,
     FileDialog_SaveDisassemblerFull,
     FileDialog_SaveDisassemblerVisible,
     FileDialog_SaveLog,
@@ -258,6 +259,16 @@ void gui_file_dialog_save_memory_dump(bool binary)
     SDL_ShowSaveFileDialog(file_dialog_callback, (void*)(intptr_t)id, application_sdl_window, filters, 1, NULL);
 }
 
+void gui_file_dialog_load_memory_dump()
+{
+    if (!begin_dialog())
+        return;
+
+    SDL_DialogFileFilter filters[] = { { "Memory Dump Files", "bin" } };
+    const char* default_path = config_emulator.last_open_path.empty() ? NULL : config_emulator.last_open_path.c_str();
+    SDL_ShowOpenFileDialog(file_dialog_callback, (void*)(intptr_t)FileDialog_LoadMemoryDumpBinary, application_sdl_window, filters, 1, default_path, false);
+}
+
 void gui_file_dialog_save_disassembler(bool full)
 {
     if (!begin_dialog())
@@ -309,6 +320,8 @@ void gui_file_dialog_load_palette(void)
 
 void gui_file_dialog_process_results(void)
 {
+    bool refocus_window = pending_refocus_window && !dialog_active;
+
 #if !defined(__APPLE__)
     if (was_exclusive_fullscreen && !dialog_active)
     {
@@ -317,11 +330,8 @@ void gui_file_dialog_process_results(void)
     }
 #endif
 
-    if (pending_refocus_window && !dialog_active)
-    {
+    if (refocus_window)
         pending_refocus_window = false;
-        SDL_RaiseWindow(application_sdl_window);
-    }
 
     if (pending_dialog_id != FileDialog_None)
     {
@@ -331,6 +341,9 @@ void gui_file_dialog_process_results(void)
         pending_dialog_path.clear();
         process_dialog_result(id, path.c_str());
     }
+
+    if (refocus_window)
+        application_refocus_window();
 }
 
 bool gui_file_dialog_is_active(void)
@@ -342,14 +355,12 @@ static void SDLCALL file_dialog_callback(void* userdata, const char* const* file
 {
     (void)filter;
     dialog_active = false;
+    pending_refocus_window = true;
 
     FileDialogID id = (FileDialogID)(intptr_t)userdata;
 
     if (!filelist || !filelist[0])
-    {
-        pending_refocus_window = true;
         return;
-    }
 
     pending_dialog_id = id;
     pending_dialog_path = filelist[0];
@@ -421,14 +432,14 @@ static void process_dialog_result(FileDialogID id, const char* path)
         case FileDialog_LoadBIOSSyscard:
         {
             config_emulator.syscard_bios_path.assign(path);
-            strcpy(gui_syscard_bios_path, config_emulator.syscard_bios_path.c_str());
+            strncpy_fit(gui_syscard_bios_path, config_emulator.syscard_bios_path.c_str(), sizeof(gui_syscard_bios_path));
             gui_load_bios(path, true);
             break;
         }
         case FileDialog_LoadBIOSGameExpress:
         {
             config_emulator.gameexpress_bios_path.assign(path);
-            strcpy(gui_gameexpress_bios_path, config_emulator.gameexpress_bios_path.c_str());
+            strncpy_fit(gui_gameexpress_bios_path, config_emulator.gameexpress_bios_path.c_str(), sizeof(gui_gameexpress_bios_path));
             gui_load_bios(path, false);
             break;
         }
@@ -472,6 +483,11 @@ static void process_dialog_result(FileDialogID id, const char* path)
         case FileDialog_SaveMemoryDumpText:
         {
             gui_debug_memory_save_dump(path, false);
+            break;
+        }
+        case FileDialog_LoadMemoryDumpBinary:
+        {
+            gui_debug_memory_load_dump(path);
             break;
         }
         case FileDialog_SaveDisassemblerFull:

@@ -28,6 +28,7 @@ Adpcm::Adpcm()
 {
     InitPointer(m_core);
     InitPointer(m_scsi_controller);
+    InitPointer(m_trace_logger);
     Reset();
 
     m_state.CONTROL = &m_control;
@@ -59,6 +60,11 @@ void Adpcm::Init(GeargrafxCore* core, CdRom* cdrom, ScsiController* scsi_control
     Reset();
 }
 
+void Adpcm::SetTraceLogger(TraceLogger* trace_logger)
+{
+    m_trace_logger = trace_logger;
+}
+
 void Adpcm::Reset()
 {
     m_read_value = 0;
@@ -83,7 +89,6 @@ void Adpcm::Reset()
     m_sample = 2048;
     m_step_index = 0;
     m_adpcm_cycle_counter = 0;
-    m_audio_cycle_counter = 0;
     m_buffer_index = 0;
     m_frame_samples = 0;
     m_filter_state = 0.0f;
@@ -182,7 +187,9 @@ void Adpcm::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_sample), sizeof(m_sample));
     stream.write(reinterpret_cast<const char*> (&m_step_index), sizeof(m_step_index));
     stream.write(reinterpret_cast<const char*> (&m_adpcm_cycle_counter), sizeof(m_adpcm_cycle_counter));
-    stream.write(reinterpret_cast<const char*> (&m_audio_cycle_counter), sizeof(m_audio_cycle_counter));
+    stream.write(reinterpret_cast<const char*> (&m_buffer_index), sizeof(m_buffer_index));
+    stream.write(reinterpret_cast<const char*> (&m_frame_samples), sizeof(m_frame_samples));
+    stream.write(reinterpret_cast<const char*> (m_buffer), sizeof(m_buffer));
     stream.write(reinterpret_cast<const char*> (&m_filter_state), sizeof(m_filter_state));
     stream.write(reinterpret_cast<const char*> (&m_dc_prev_x), sizeof(m_dc_prev_x));
     stream.write(reinterpret_cast<const char*> (&m_dc_prev_y), sizeof(m_dc_prev_y));
@@ -216,7 +223,30 @@ void Adpcm::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_sample), sizeof(m_sample));
     stream.read(reinterpret_cast<char*> (&m_step_index), sizeof(m_step_index));
     stream.read(reinterpret_cast<char*> (&m_adpcm_cycle_counter), sizeof(m_adpcm_cycle_counter));
-    stream.read(reinterpret_cast<char*> (&m_audio_cycle_counter), sizeof(m_audio_cycle_counter));
+
+    if (version < 32)
+    {
+        s32 audio_cycle_counter = 0;
+        stream.read(reinterpret_cast<char*> (&audio_cycle_counter), sizeof(audio_cycle_counter));
+    }
+
+    if (version >= 27)
+    {
+        stream.read(reinterpret_cast<char*> (&m_buffer_index), sizeof(m_buffer_index));
+        stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));
+        stream.read(reinterpret_cast<char*> (m_buffer), sizeof(m_buffer));
+
+        m_buffer_index = CLAMP(m_buffer_index, 0, GG_AUDIO_BUFFER_SIZE - 2);
+        m_buffer_index &= ~1;
+        m_frame_samples = CLAMP(m_frame_samples, 0, GG_AUDIO_BUFFER_SIZE);
+    }
+    else
+    {
+        m_buffer_index = 0;
+        m_frame_samples = 0;
+        memset(m_buffer, 0, sizeof(m_buffer));
+    }
+
     stream.read(reinterpret_cast<char*> (&m_filter_state), sizeof(m_filter_state));
 
     if (version >= 24)

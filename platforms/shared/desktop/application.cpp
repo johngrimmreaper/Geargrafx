@@ -66,6 +66,7 @@ static void* macos_fullscreen_observer = NULL;
 static void* macos_nswindow = NULL;
 extern "C" void* macos_install_fullscreen_observer(void* nswindow, void(*enter_cb)(), void(*exit_cb)());
 extern "C" void macos_set_native_fullscreen(void* nswindow, bool enter);
+extern "C" void macos_refocus_window(void* nswindow);
 #endif
 
 int application_init(const char* rom_file, const char* symbol_file, bool force_fullscreen, bool force_windowed, int mcp_mode, int mcp_tcp_port)
@@ -147,6 +148,8 @@ int application_init(const char* rom_file, const char* symbol_file, bool force_f
         emu_mcp_start();
     }
 
+    application_refocus_window();
+
     return 0;
 }
 
@@ -218,14 +221,17 @@ void application_trigger_fullscreen(bool fullscreen)
         }
         else
         {
-            // Desktop fullscreen: no display mode
+            // Borderless fullscreen (default): pass NULL for desktop fullscreen
             SDL_SetWindowFullscreenMode(application_sdl_window, NULL);
         }
+
         SDL_SetWindowFullscreen(application_sdl_window, true);
+        SDL_ERROR("SDL_SetWindowFullscreen");
     }
     else
     {
         SDL_SetWindowFullscreen(application_sdl_window, false);
+        SDL_ERROR("SDL_SetWindowFullscreen");
     }
     config_emulator.fullscreen = fullscreen;
 #endif
@@ -239,9 +245,29 @@ void application_trigger_fit_to_content(int width, int height)
     SDL_SetWindowSize(application_sdl_window, width, height);
 }
 
+void application_refocus_window(void)
+{
+    if (!application_sdl_window)
+        return;
+
+    SDL_RaiseWindow(application_sdl_window);
+
+#if defined(__APPLE__)
+    macos_refocus_window(macos_nswindow);
+#endif
+}
 
 void application_update_title_with_rom(const char* rom)
 {
+    if (!application_sdl_window)
+        return;
+
+    if (!IsValidPointer(rom) || (rom[0] == 0))
+    {
+        SDL_SetWindowTitle(application_sdl_window, WINDOW_TITLE);
+        return;
+    }
+
     char final_title[256];
     snprintf(final_title, 256, "%s - %s", WINDOW_TITLE, rom);
     SDL_SetWindowTitle(application_sdl_window, final_title);
@@ -381,6 +407,8 @@ static void handle_mouse_cursor(void)
     }
     else
         ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+
+    SDL_SetWindowRelativeMouseMode(application_sdl_window, config_emulator.capture_mouse);
 }
 
 static void handle_menu(void)
@@ -433,8 +461,11 @@ static void sdl_events(void)
             if (!file_dialog_active)
                 ImGui_ImplSDL3_ProcessEvent(&event);
 
-            if (!gui_in_use && !file_dialog_active)
+            if (!file_dialog_active && !ImGui::GetIO().WantCaptureKeyboard)
                 events_shortcuts(&event);
+
+            if (!file_dialog_active)
+                events_handle_emu_event(&event);
         }
     }
 }
@@ -462,7 +493,7 @@ static void sdl_events_app(const SDL_Event* event)
         {
             const char* dropped_filedir = event->drop.data;
             gui_load_rom(dropped_filedir);
-            SDL_RaiseWindow(application_sdl_window);
+            application_refocus_window();
             break;
         }
         case SDL_EVENT_WINDOW_FOCUS_GAINED:

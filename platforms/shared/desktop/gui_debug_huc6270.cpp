@@ -127,7 +127,7 @@ void gui_debug_window_huc6270_info(int vdc)
     ImGui::TextColored(violet, "HDE"); ImGui::SameLine();
     ImGui::TextColored(white, "%02X", (huc6270_state->R[HUC6270_REG_HDR] >> 8) & 0x7F); ImGui::SameLine();
 
-    ImGui::TextColored(violet, "HSW"); ImGui::SameLine();
+    ImGui::TextColored(violet, " HSW"); ImGui::SameLine();
     ImGui::TextColored(white, "%02X", huc6270_state->R[HUC6270_REG_HSR] & 0x1F);
 
     ImGui::TextColored(violet, "VSW"); ImGui::SameLine();
@@ -137,7 +137,7 @@ void gui_debug_window_huc6270_info(int vdc)
     ImGui::TextColored(white, "%02X", (huc6270_state->R[HUC6270_REG_VSR] >> 8) & 0xFF); ImGui::SameLine();
 
     ImGui::TextColored(violet, "VDW"); ImGui::SameLine();
-    ImGui::TextColored(white, "%02X", huc6270_state->R[HUC6270_REG_VDR] & 0x1FF); ImGui::SameLine();
+    ImGui::TextColored(white, "%03X", huc6270_state->R[HUC6270_REG_VDR] & 0x1FF); ImGui::SameLine();
 
     ImGui::TextColored(violet, "VCR"); ImGui::SameLine();
     ImGui::TextColored(white, "%02X", huc6270_state->R[HUC6270_REG_VCR] & 0xFF);

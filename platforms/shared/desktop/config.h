@@ -36,12 +36,26 @@ static const int config_version = 2;
 static const int config_max_recent_roms = 10;
 static const int config_memory_editor_count = 14;
 
+enum config_ShaderMode
+{
+    config_ShaderMode_PixelPerfect = 0,
+    config_ShaderMode_External = 1
+};
+
+enum config_Theme
+{
+    config_Theme_Light = 0,
+    config_Theme_Dark = 1,
+    config_Theme_Count = 2
+};
+
 struct config_Emulator
 {
     bool maximized = false;
     bool fullscreen = false;
-    int fullscreen_mode = 1;
+    int fullscreen_mode = 0;
     bool always_show_menu = false;
+    int theme = config_Theme_Dark;
     bool paused = false;
     int save_slot = 0;
     bool start_paused = false;
@@ -72,6 +86,8 @@ struct config_Emulator
     int cdrom_type = 0;
     bool preload_cdrom = false;
     int mcp_tcp_port = 7777;
+    bool capture_mouse = false;
+    int mouse_sensitivity = 5;
 };
 
 struct config_Video
@@ -85,21 +101,23 @@ struct config_Video
     int scanline_end = 234;
     int palette = 0;
     bool fps = false;
-    bool bilinear = false;
     bool sprite_limit = false;
     bool safe_vdc_defaults = false;
-    bool mix_frames = true;
-    float mix_frames_intensity = 0.50f;
-    bool scanlines = true;
-    bool scanlines_filter = false;
-    float scanlines_intensity = 0.10f;
     bool sync = true;
-    float background_color[3] = {0.1f, 0.1f, 0.1f};
-    float background_color_debugger[3] = {0.2f, 0.2f, 0.2f};
+    float background_color[config_Theme_Count][3] = {
+        {128.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f},
+        {0.1f, 0.1f, 0.1f}
+    };
+    float background_color_debugger[config_Theme_Count][3] = {
+        {160.0f / 255.0f, 160.0f / 255.0f, 160.0f / 255.0f},
+        {0.2f, 0.2f, 0.2f}
+    };
     bool lowpass_filter = true;
     float lowpass_intensity = 1.0f;
     float lowpass_cutoff_mhz = 5.0f;
     bool lowpass_speed[3] = { false, true, true };
+    int shader_mode = config_ShaderMode_PixelPerfect;
+    std::string shader_preset_path;
 };
 
 struct config_Audio
@@ -107,15 +125,25 @@ struct config_Audio
     bool enable = true;
     bool sync = true;
     bool huc6280a = true;
+    float master_volume = 1.0f;
     float psg_volume = 1.0f;
     float cdrom_volume = 1.0f;
     float adpcm_volume = 1.0f;
     int buffer_count = 3;
 };
 
+struct config_Rewind
+{
+    bool enabled = true;
+    int buffer_seconds = 10;
+    int frames_per_snapshot = 1;
+    float speed = 2.0f;
+};
+
 struct config_Input
 {
     bool turbo_tap = false;
+    bool allow_up_down = false;
     int controller_type[GG_MAX_GAMEPADS];
     int avenue_pad_3_button[GG_MAX_GAMEPADS];
     bool turbo_enabled[GG_MAX_GAMEPADS][2];
@@ -167,6 +195,7 @@ enum config_HotkeyIndex
     config_HotkeyIndex_Reset,
     config_HotkeyIndex_Pause,
     config_HotkeyIndex_FFWD,
+    config_HotkeyIndex_Rewind,
     config_HotkeyIndex_SaveState,
     config_HotkeyIndex_LoadState,
     config_HotkeyIndex_Screenshot,
@@ -186,6 +215,8 @@ enum config_HotkeyIndex
     config_HotkeyIndex_SelectSlot3,
     config_HotkeyIndex_SelectSlot4,
     config_HotkeyIndex_SelectSlot5,
+    config_HotkeyIndex_CaptureMouse,
+    config_HotkeyIndex_Mute,
     config_HotkeyIndex_COUNT
 };
 
@@ -230,11 +261,22 @@ struct config_Debug
     bool show_adpcm = false;
     bool show_arcade_card = false;
     bool show_trace_logger = false;
+    bool show_rewind = false;
     bool trace_counter = true;
     bool trace_bank = true;
     bool trace_registers = true;
     bool trace_flags = true;
     bool trace_bytes = true;
+    bool trace_cpu = true;
+    bool trace_cpu_irq = true;
+    bool trace_vdc = true;
+    bool trace_input = true;
+    bool trace_timer = true;
+    bool trace_cdrom = true;
+    bool trace_psg = true;
+    bool trace_adpcm = true;
+    bool trace_vce = true;
+    bool trace_scsi = true;
     bool dis_show_mem = true;
     bool dis_show_symbols = true;
     bool dis_show_segment = true;
@@ -245,7 +287,7 @@ struct config_Debug
     bool dis_replace_labels = true;
     int dis_look_ahead_count = 20;
     int font_size = 0;
-    int scale = 1;
+    int scale = 2;
     bool multi_viewport = false;
     bool single_instance = false;
     bool auto_debug_settings = false;
@@ -271,6 +313,7 @@ EXTERN char config_imgui_file_path[512];
 EXTERN config_Emulator config_emulator;
 EXTERN config_Video config_video;
 EXTERN config_Audio config_audio;
+EXTERN config_Rewind config_rewind;
 EXTERN config_Input config_input;
 EXTERN config_Input_Keyboard config_input_keyboard[GG_MAX_GAMEPADS];
 EXTERN config_Input_Gamepad config_input_gamepad[GG_MAX_GAMEPADS];
@@ -283,7 +326,10 @@ EXTERN void config_destroy(void);
 EXTERN void config_read(void);
 EXTERN void config_write(void);
 EXTERN void config_load_defaults(void);
+EXTERN void config_push_recent_media(const std::string& path);
 EXTERN void config_update_hotkey_string(config_Hotkey* hotkey);
+EXTERN bool config_read_shader_parameter(const char* preset_file, const char* parameter_name, float* value);
+EXTERN void config_write_shader_parameter(const char* preset_file, const char* parameter_name, float value);
 
 #undef CONFIG_IMPORT
 #undef EXTERN

@@ -81,13 +81,14 @@ inline int as_hex(const char c)
     return 0;
 }
 
-inline unsigned int pow_2_ceil(u16 n)
+inline u32 pow_2_ceil(u32 n)
 {
     --n;
     n |= n >> 1;
     n |= n >> 2;
     n |= n >> 4;
     n |= n >> 8;
+    n |= n >> 16;
     ++n;
     return n;
 }
@@ -187,18 +188,44 @@ inline char* strncpy_fit(char* dest, const char* src, size_t dest_size)
     if (dest_size == 0)
         return dest;
 
-    strncpy(dest, src, dest_size - 1);
-    dest[dest_size - 1] = '\0';
+    size_t copy_size = strlen(src);
+    if (copy_size >= dest_size)
+        copy_size = dest_size - 1;
+
+    memcpy(dest, src, copy_size);
+    dest[copy_size] = '\0';
 
     return dest;
 }
 
 inline char* strncat_fit(char* dest, const char* src, size_t dest_size)
 {
-    if (dest_size != 0)
-        dest_size -= strlen(dest) + 1;
+    if (dest_size == 0)
+        return dest;
 
-    return strncat(dest, src, dest_size);
+    size_t len = strlen(dest);
+    if (len + 1 >= dest_size)
+        return dest;
+
+    return strncat(dest, src, dest_size - len - 1);
+}
+
+inline void append_path_component(std::string& path, const char* component)
+{
+    if (path.length() > 0)
+    {
+        char last = path[path.length() - 1];
+        if (last != '/' && last != '\\')
+        {
+#if defined(_WIN32)
+            path += "\\";
+#else
+            path += "/";
+#endif
+        }
+    }
+
+    path += component;
 }
 
 inline bool create_directory_if_not_exists(const char* path)

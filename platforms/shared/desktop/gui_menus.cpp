@@ -30,8 +30,11 @@
 #include "gamepad.h"
 #include "emu.h"
 #include "ogl_renderer.h"
+#include "ogl_shader_chain.h"
+#include "shader_preset.h"
 #include "utils.h"
 #include "geargrafx.h"
+#include "rewind.h"
 
 static bool open_rom = false;
 static bool open_ram = false;
@@ -50,15 +53,29 @@ static bool open_syscard_bios = false;
 static bool open_gameexpress_bios = false;
 static bool save_debug_settings = false;
 static bool load_debug_settings = false;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+static bool open_physical_cdrom = false;
+#endif
+static ShaderPresetInfo shader_presets[SHADER_PRESET_MAX_DISCOVERED];
+static int shader_preset_count = 0;
 
 static void menu_geargrafx(void);
 static void menu_emulator(void);
 static void menu_video(void);
+static void menu_shader(void);
+static void draw_shader_parameters(void);
+static bool shader_parameter_is_toggle(const ShaderPresetParameter* parameter);
+static bool shader_parameter_is_integer(const ShaderPresetParameter* parameter);
+static int shader_parameter_round_to_int(float value);
 static void menu_input(void);
 static void menu_audio(void);
 static void menu_debug(void);
 static void menu_about(void);
+static void draw_background_color_menu(const char* label, int theme);
+static void draw_mcp_status(void);
 static void file_dialogs(void);
+static bool media_menu_actions_enabled(void);
+static const char* get_current_media_directory_text(void);
 static void keyboard_configuration_item(const char* text, SDL_Scancode* key, int player);
 static void gamepad_configuration_item(const char* text, int* button, int player);
 static void hotkey_configuration_item(const char* text, config_Hotkey* hotkey);
@@ -68,6 +85,7 @@ static void draw_savestate_slot_info(int slot);
 void gui_init_menus(void)
 {
     gui_shortcut_open_rom = false;
+    shader_preset_count = shader_preset_scan_bundled(shader_presets, SHADER_PRESET_MAX_DISCOVERED);
 }
 
 void gui_main_menu(void)
@@ -90,6 +108,9 @@ void gui_main_menu(void)
     open_gameexpress_bios = false;
     save_debug_settings = false;
     load_debug_settings = false;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    open_physical_cdrom = false;
+#endif
 
     if (application_show_menu && ImGui::BeginMainMenuBar())
     {
@@ -102,6 +123,7 @@ void gui_main_menu(void)
         menu_audio();
         menu_debug();
         menu_about();
+        draw_mcp_status();
 
         gui_main_menu_height = (int)ImGui::GetWindowSize().y;
 
@@ -116,11 +138,30 @@ static void menu_geargrafx(void)
     if (ImGui::BeginMenu(GG_TITLE))
     {
         gui_in_use = true;
+        bool media_actions_enabled = media_menu_actions_enabled();
 
         if (ImGui::MenuItem("Open ROM/CD...", config_hotkeys[config_HotkeyIndex_OpenROM].str))
         {
             open_rom = true;
         }
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+        if (ImGui::BeginMenu("Physical CD-ROM"))
+        {
+            bool physical_cdrom_loaded = !emu_is_empty() && emu_get_core()->GetMedia()->IsPhysicalCdRom();
+            if (ImGui::MenuItem("Open...", "", false, !physical_cdrom_loaded))
+            {
+                open_physical_cdrom = true;
+            }
+
+            if (ImGui::MenuItem("Eject", "", false, physical_cdrom_loaded))
+            {
+                gui_action_eject_physical_cdrom();
+            }
+
+            ImGui::EndMenu();
+        }
+#endif
 
         if (ImGui::BeginMenu("Open Recent"))
         {
@@ -128,10 +169,11 @@ static void menu_geargrafx(void)
             {
                 if (config_emulator.recent_roms[i].length() > 0)
                 {
-                    if (ImGui::MenuItem(config_emulator.recent_roms[i].c_str()))
+                    const char* shortcut = (i == 0) ? config_hotkeys[config_HotkeyIndex_ReloadROM].str : NULL;
+                    if (ImGui::MenuItem(config_emulator.recent_roms[i].c_str(), shortcut))
                     {
                         char rom_path[4096];
-                        strcpy(rom_path, config_emulator.recent_roms[i].c_str());
+                        strncpy_fit(rom_path, config_emulator.recent_roms[i].c_str(), sizeof(rom_path));
                         gui_load_rom(rom_path);
                     }
                 }
@@ -142,19 +184,19 @@ static void menu_geargrafx(void)
 
         ImGui::Separator();
         
-        if (ImGui::MenuItem("Reset", config_hotkeys[config_HotkeyIndex_Reset].str))
+        if (ImGui::MenuItem("Reset", config_hotkeys[config_HotkeyIndex_Reset].str, false, media_actions_enabled))
         {
             gui_action_reset();
         }
 
-        if (ImGui::MenuItem("Pause", config_hotkeys[config_HotkeyIndex_Pause].str, &config_emulator.paused))
+        if (ImGui::MenuItem("Pause", config_hotkeys[config_HotkeyIndex_Pause].str, &config_emulator.paused, media_actions_enabled))
         {
             gui_action_pause();
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Fast Forward", config_hotkeys[config_HotkeyIndex_FFWD].str, &config_emulator.ffwd))
+        if (ImGui::MenuItem("Fast Forward", config_hotkeys[config_HotkeyIndex_FFWD].str, &config_emulator.ffwd, media_actions_enabled))
         {
             gui_action_ffwd();
         }
@@ -167,26 +209,38 @@ static void menu_geargrafx(void)
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Rewind"))
+        {
+            if (ImGui::MenuItem("Enabled", config_hotkeys[config_HotkeyIndex_Rewind].str, &config_rewind.enabled))
+                rewind_reset();
+
+            ImGui::PushItemWidth(140.0f);
+            ImGui::SliderFloat("Speed", &config_rewind.speed, 1.0f, 8.0f, "%.0fx");
+            ImGui::PopItemWidth();
+
+            ImGui::EndMenu();
+        }
+
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Save BRAM As..."))
+        if (ImGui::MenuItem("Save BRAM As...", "", false, media_actions_enabled))
         {
             save_ram = true;
         }
 
-        if (ImGui::MenuItem("Load BRAM From..."))
+        if (ImGui::MenuItem("Load BRAM From...", "", false, media_actions_enabled))
         {
             open_ram = true;
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Save State As...")) 
+        if (ImGui::MenuItem("Save State As...", "", false, media_actions_enabled))
         {
             save_state = true;
         }
 
-        if (ImGui::MenuItem("Load State From..."))
+        if (ImGui::MenuItem("Load State From...", "", false, media_actions_enabled))
         {
             open_state = true;
         }
@@ -205,7 +259,7 @@ static void menu_geargrafx(void)
             ImGui::EndMenu();
         }
 
-        if (ImGui::MenuItem("Save State", config_hotkeys[config_HotkeyIndex_SaveState].str))
+        if (ImGui::MenuItem("Save State", config_hotkeys[config_HotkeyIndex_SaveState].str, false, media_actions_enabled))
         {
             std::string message("Saving state to slot ");
             message += std::to_string(config_emulator.save_slot + 1);
@@ -213,7 +267,7 @@ static void menu_geargrafx(void)
             emu_save_state_slot(config_emulator.save_slot + 1);
         }
 
-        if (ImGui::MenuItem("Load State", config_hotkeys[config_HotkeyIndex_LoadState].str))
+        if (ImGui::MenuItem("Load State", config_hotkeys[config_HotkeyIndex_LoadState].str, false, media_actions_enabled))
         {
             std::string message("Loading state from slot ");
             message += std::to_string(config_emulator.save_slot + 1);
@@ -231,12 +285,12 @@ static void menu_geargrafx(void)
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Save Screenshot As..."))
+        if (ImGui::MenuItem("Save Screenshot As...", "", false, media_actions_enabled))
         {
             save_screenshot = true;
         }
 
-        if (ImGui::MenuItem("Save Screenshot", config_hotkeys[config_HotkeyIndex_Screenshot].str))
+        if (ImGui::MenuItem("Save Screenshot", config_hotkeys[config_HotkeyIndex_Screenshot].str, false, media_actions_enabled))
         {
             gui_action_save_screenshot(NULL);
         }
@@ -257,6 +311,19 @@ static void menu_geargrafx(void)
 
         ImGui::EndMenu();
     }
+}
+
+static bool media_menu_actions_enabled(void)
+{
+    if (emu_is_empty())
+        return false;
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    if (emu_get_core()->GetMedia()->HasPhysicalCdRomError())
+        return false;
+#endif
+
+    return true;
 }
 
 static void menu_emulator(void)
@@ -283,7 +350,7 @@ static void menu_emulator(void)
                 case Directory_Location_ROM:
                 {
                     if (!emu_is_empty())
-                        ImGui::Text("%s", emu_get_core()->GetMedia()->GetFileDirectory());
+                        ImGui::Text("%s", get_current_media_directory_text());
                     break;
                 }
                 case Directory_Location_Custom:
@@ -322,7 +389,7 @@ static void menu_emulator(void)
                 case Directory_Location_ROM:
                 {
                     if (!emu_is_empty())
-                        ImGui::Text("%s", emu_get_core()->GetMedia()->GetFileDirectory());
+                        ImGui::Text("%s", get_current_media_directory_text());
                     break;
                 }
                 case Directory_Location_Custom:
@@ -394,7 +461,7 @@ static void menu_emulator(void)
                 case Directory_Location_ROM:
                 {
                     if (!emu_is_empty())
-                        ImGui::Text("%s", emu_get_core()->GetMedia()->GetFileDirectory());
+                        ImGui::Text("%s", get_current_media_directory_text());
                     break;
                 }
                 case Directory_Location_Custom:
@@ -575,8 +642,10 @@ static void menu_emulator(void)
             hotkey_configuration_item("Open ROM:", &config_hotkeys[config_HotkeyIndex_OpenROM]);
             hotkey_configuration_item("Quit:", &config_hotkeys[config_HotkeyIndex_Quit]);
             hotkey_configuration_item("Reset:", &config_hotkeys[config_HotkeyIndex_Reset]);
+            hotkey_configuration_item("Reload ROM:", &config_hotkeys[config_HotkeyIndex_ReloadROM]);
             hotkey_configuration_item("Pause:", &config_hotkeys[config_HotkeyIndex_Pause]);
             hotkey_configuration_item("Fast Forward:", &config_hotkeys[config_HotkeyIndex_FFWD]);
+            hotkey_configuration_item("Rewind:", &config_hotkeys[config_HotkeyIndex_Rewind]);
             hotkey_configuration_item("Save State:", &config_hotkeys[config_HotkeyIndex_SaveState]);
             hotkey_configuration_item("Load State:", &config_hotkeys[config_HotkeyIndex_LoadState]);
             hotkey_configuration_item("Save State Slot 1:", &config_hotkeys[config_HotkeyIndex_SelectSlot1]);
@@ -585,8 +654,10 @@ static void menu_emulator(void)
             hotkey_configuration_item("Save State Slot 4:", &config_hotkeys[config_HotkeyIndex_SelectSlot4]);
             hotkey_configuration_item("Save State Slot 5:", &config_hotkeys[config_HotkeyIndex_SelectSlot5]);
             hotkey_configuration_item("Screenshot:", &config_hotkeys[config_HotkeyIndex_Screenshot]);
+            hotkey_configuration_item("Mute Audio:", &config_hotkeys[config_HotkeyIndex_Mute]);
             hotkey_configuration_item("Fullscreen:", &config_hotkeys[config_HotkeyIndex_Fullscreen]);
             hotkey_configuration_item("Show Main Menu:", &config_hotkeys[config_HotkeyIndex_ShowMainMenu]);
+            hotkey_configuration_item("Capture Mouse:", &config_hotkeys[config_HotkeyIndex_CaptureMouse]);
 
             gui_popup_modal_hotkey();
 
@@ -595,7 +666,6 @@ static void menu_emulator(void)
 
         if (ImGui::BeginMenu("Debug Hotkeys"))
         {
-            hotkey_configuration_item("Reload ROM:", &config_hotkeys[config_HotkeyIndex_ReloadROM]);
             hotkey_configuration_item("Step Into:", &config_hotkeys[config_HotkeyIndex_DebugStepInto]);
             hotkey_configuration_item("Step Over:", &config_hotkeys[config_HotkeyIndex_DebugStepOver]);
             hotkey_configuration_item("Step Out:", &config_hotkeys[config_HotkeyIndex_DebugStepOut]);
@@ -644,7 +714,7 @@ static void menu_video(void)
         if (ImGui::BeginMenu("Fullscreen Mode"))
         {
             ImGui::PushItemWidth(130.0f);
-            ImGui::Combo("##fullscreen_mode", &config_emulator.fullscreen_mode, "Full Screen Desktop\0Full Screen\0\0");
+            ImGui::Combo("##fullscreen_mode", &config_emulator.fullscreen_mode, "Borderless\0Exclusive\0\0");
             ImGui::PopItemWidth();
             ImGui::EndMenu();
         }
@@ -676,7 +746,7 @@ static void menu_video(void)
             ImGui::PushItemWidth(250.0f);
             ImGui::Combo("##scale", &config_video.scale, "Integer Scale (Auto)\0Integer Scale (Manual)\0Scale to Window Height\0Scale to Window Width & Height\0\0");
             if (config_video.scale == 1)
-                ImGui::SliderInt("##scale_manual", &config_video.scale_manual, 1, 10);
+                ImGui::SliderInt("##scale_manual", &config_video.scale_manual, 1, 16);
             ImGui::PopItemWidth();
             ImGui::EndMenu();
         }
@@ -822,23 +892,7 @@ static void menu_video(void)
         }
 
         ImGui::Separator();
-
-        ImGui::MenuItem("Bilinear Filtering", "", &config_video.bilinear);
-
-        if (ImGui::BeginMenu("Screen Ghosting"))
-        {
-            ImGui::MenuItem("Enable Screen Ghosting", "", &config_video.mix_frames);
-            ImGui::SliderFloat("##screen_ghosting", &config_video.mix_frames_intensity, 0.0f, 1.0f, "Intensity = %.2f");
-            ImGui::EndMenu();
-        }
-
-        if (ImGui::BeginMenu("Scanlines"))
-        {
-            ImGui::MenuItem("Enable Scanlines", "", &config_video.scanlines);
-            ImGui::MenuItem("Enable Scanlines Filter", "", &config_video.scanlines_filter);
-            ImGui::SliderFloat("##scanlines", &config_video.scanlines_intensity, 0.0f, 1.0f, "Intensity = %.2f");
-            ImGui::EndMenu();
-        }
+        menu_shader();
 
         if (ImGui::BeginMenu("Low Pass Filter"))
         {
@@ -884,21 +938,21 @@ static void menu_video(void)
 
         ImGui::Separator();
 
+        if (ImGui::BeginMenu("Theme"))
+        {
+            ImGui::PushItemWidth(100.0f);
+            if (ImGui::Combo("##theme", &config_emulator.theme, "Light\0Dark\0\0"))
+            {
+                gui_set_style();
+            }
+            ImGui::PopItemWidth();
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("Background Color"))
         {
-            ImGui::ColorEdit3("##normal_bg", config_video.background_color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float);
-            ImGui::SameLine();
-            ImGui::Text("Normal Background");
-
-            ImGui::Separator();
-
-            if (ImGui::ColorEdit3("##debugger_bg", config_video.background_color_debugger, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float))
-            {
-                ImGuiStyle& style = ImGui::GetStyle();
-                style.Colors[ImGuiCol_DockingEmptyBg] = ImVec4(config_video.background_color_debugger[0], config_video.background_color_debugger[1], config_video.background_color_debugger[2], 1.0f);
-            }
-            ImGui::SameLine();
-            ImGui::Text("Debugger Background");
+            draw_background_color_menu("Dark Theme", config_Theme_Dark);
+            draw_background_color_menu("Light Theme", config_Theme_Light);
 
             ImGui::EndMenu();
         }
@@ -907,23 +961,198 @@ static void menu_video(void)
     }
 }
 
+static void draw_background_color_menu(const char* label, int theme)
+{
+    if (ImGui::BeginMenu(label))
+    {
+        ImGui::PushID(theme);
+
+        ImGui::ColorEdit3("##normal_bg", config_video.background_color[theme], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float);
+        ImGui::SameLine();
+        ImGui::Text("Normal Background");
+
+        ImGui::Separator();
+
+        if (ImGui::ColorEdit3("##debugger_bg", config_video.background_color_debugger[theme], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float))
+        {
+            if (config_emulator.theme == theme)
+                gui_set_style();
+        }
+        ImGui::SameLine();
+        ImGui::Text("Debugger Background");
+
+        ImGui::PopID();
+        ImGui::EndMenu();
+    }
+}
+
+static void menu_shader(void)
+{
+    if (!ImGui::BeginMenu("Shader"))
+        return;
+
+    bool has_preset = ogl_shader_chain_has_preset();
+    int selected_index = 0;
+
+    if (has_preset && config_video.shader_mode == config_ShaderMode_External)
+    {
+        for (int i = 0; i < shader_preset_count; i++)
+        {
+            if (shader_preset_config_path_matches(config_video.shader_preset_path.c_str(), shader_presets[i].path))
+            {
+                selected_index = i + 1;
+                break;
+            }
+        }
+    }
+
+    const char* preview = selected_index == 0 ? "Pixel Perfect" : shader_presets[selected_index - 1].name;
+    ImGui::PushItemWidth(240.0f);
+    if (ImGui::BeginCombo("##ShaderPreset", preview))
+    {
+        bool selected = selected_index == 0;
+        if (ImGui::Selectable("Pixel Perfect", selected))
+        {
+            if (selected_index != 0)
+            {
+                ogl_renderer_unload_shader_preset();
+                gui_set_status_message("Shader preset: Pixel Perfect", 3000);
+            }
+        }
+        if (selected)
+            ImGui::SetItemDefaultFocus();
+
+        for (int i = 0; i < shader_preset_count; i++)
+        {
+            selected = selected_index == i + 1;
+            if (ImGui::Selectable(shader_presets[i].name, selected))
+            {
+                if (selected_index != i + 1)
+                {
+                    if (ogl_renderer_load_shader_preset(shader_presets[i].path))
+                    {
+                        std::string message("Shader preset loaded: ");
+                        message += ogl_shader_chain_get_preset_name();
+                        gui_set_status_message(message.c_str(), 3000);
+                    }
+                    else
+                    {
+                        std::string message("Shader preset failed: ");
+                        message += ogl_shader_chain_get_last_error();
+                        gui_set_status_message(message.c_str(), 5000);
+                    }
+                }
+            }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth();
+
+    has_preset = ogl_shader_chain_has_preset();
+
+    if (has_preset && ogl_shader_chain_get_parameter_count() > 0)
+    {
+        if (ImGui::BeginMenu("Parameters"))
+        {
+            draw_shader_parameters();
+            ImGui::EndMenu();
+        }
+    }
+    else if (ogl_shader_chain_get_last_error()[0] != '\0')
+    {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.98f, 0.15f, 0.45f, 1.0f), "%s", ogl_shader_chain_get_last_error());
+    }
+
+    ImGui::EndMenu();
+}
+
+static void draw_shader_parameters(void)
+{
+    int count = ogl_shader_chain_get_parameter_count();
+    if (count <= 0)
+        return;
+
+    const float parameter_width = 220.0f;
+
+    if (ImGui::Button("Restore Defaults", ImVec2(parameter_width, 0.0f)))
+    {
+        if (ogl_shader_chain_restore_default_parameters())
+        {
+            ogl_renderer_save_shader_parameter_config();
+            gui_set_status_message("Shader parameters restored", 3000);
+        }
+    }
+
+    ImGui::PushItemWidth(parameter_width);
+
+    for (int i = 0; i < count; i++)
+    {
+        const ShaderPresetParameter* parameter = ogl_shader_chain_get_parameter(i);
+        if (!parameter)
+            continue;
+
+        float value = parameter->value;
+        char label[160];
+        snprintf(label, sizeof(label), "%s##shader_parameter_%d", parameter->label[0] != '\0' ? parameter->label : parameter->name, i);
+
+        if (shader_parameter_is_toggle(parameter))
+        {
+            bool enabled = value >= 0.5f;
+            if (ImGui::Checkbox(label, &enabled))
+            {
+                ogl_shader_chain_set_parameter(i, enabled ? 1.0f : 0.0f);
+                ogl_renderer_save_shader_parameter_config();
+            }
+            continue;
+        }
+
+        if (shader_parameter_is_integer(parameter))
+        {
+            int int_value = shader_parameter_round_to_int(value);
+            int min_value = shader_parameter_round_to_int(parameter->minimum);
+            int max_value = shader_parameter_round_to_int(parameter->maximum);
+            if (ImGui::SliderInt(label, &int_value, min_value, max_value))
+            {
+                ogl_shader_chain_set_parameter(i, (float)int_value);
+                ogl_renderer_save_shader_parameter_config();
+            }
+            continue;
+        }
+
+        if (ImGui::SliderFloat(label, &value, parameter->minimum, parameter->maximum, "%.3f"))
+        {
+            ogl_shader_chain_set_parameter(i, value);
+            ogl_renderer_save_shader_parameter_config();
+        }
+    }
+
+    ImGui::PopItemWidth();
+}
+
+static bool shader_parameter_is_toggle(const ShaderPresetParameter* parameter)
+{
+    return parameter && parameter->minimum == 0.0f && parameter->maximum == 1.0f && parameter->step >= 1.0f;
+}
+
+static bool shader_parameter_is_integer(const ShaderPresetParameter* parameter)
+{
+    return parameter && parameter->step >= 1.0f;
+}
+
+static int shader_parameter_round_to_int(float value)
+{
+    return value >= 0.0f ? (int)(value + 0.5f) : (int)(value - 0.5f);
+}
+
 static void menu_input(void)
 {
     if (ImGui::BeginMenu("Input"))
     {
         gui_in_use = true;
 
-        if (ImGui::MenuItem("Enable Turbo Tap", "", &config_input.turbo_tap))
-        {
-            emu_set_turbo_tap(config_input.turbo_tap);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::BeginTooltip();
-            ImGui::Text("It is recommended to keep this option disabled if");
-            ImGui::Text("you are using the emulator in single player only.");
-            ImGui::EndTooltip();
-        }
 
         if (ImGui::BeginMenu("Controller"))
         {
@@ -935,7 +1164,7 @@ static void menu_input(void)
                 if (ImGui::BeginMenu(player_name))
                 {
                     ImGui::PushItemWidth(200.0f);
-                    if (ImGui::Combo("##controller", &config_input.controller_type[i], "Standard Pad (2 buttons)\0Avenue Pad 3 (3 buttons)\0Avenue Pad 6 (6 buttons)\0\0"))
+                    if (ImGui::Combo("##controller", &config_input.controller_type[i], "Standard Pad (2 buttons)\0Avenue Pad 3 (3 buttons)\0Avenue Pad 6 (6 buttons)\0Mouse\0\0"))
                     {
                         emu_set_pad_type((GG_Controllers)i, (GG_Controller_Type)config_input.controller_type[i]);
                     }
@@ -1020,6 +1249,23 @@ static void menu_input(void)
                     ImGui::EndMenu();
                 }
             }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Mouse"))
+        {
+            ImGui::MenuItem("Capture Mouse", config_hotkeys[config_HotkeyIndex_CaptureMouse].str, &config_emulator.capture_mouse);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::Text("When enabled, the mouse will be captured inside");
+                ImGui::Text("the emulator window to use the mouse freely.");
+                ImGui::Text("Press %s to release the mouse.", config_hotkeys[config_HotkeyIndex_CaptureMouse].str);
+                ImGui::EndTooltip();
+            }
+
+            ImGui::SliderInt("##mouse_sensitivity", &config_emulator.mouse_sensitivity, 1, 15, "Sensitivity = %d");
 
             ImGui::EndMenu();
         }
@@ -1150,7 +1396,12 @@ static void menu_input(void)
                         gamepad_configuration_item("Reset:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Reset], i);
                         gamepad_configuration_item("Pause:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Pause], i);
                         gamepad_configuration_item("Fast Forward:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_FFWD], i);
+                        gamepad_configuration_item("Rewind:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Rewind], i);
                         gamepad_configuration_item("Screenshot:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Screenshot], i);
+                        gamepad_configuration_item("Mute Audio:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Mute], i);
+                        gamepad_configuration_item("Fullscreen:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_Fullscreen], i);
+                        gamepad_configuration_item("Capture Mouse:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_CaptureMouse], i);
+                        gamepad_configuration_item("Show Main Menu:", &config_input_gamepad_shortcuts[i].gamepad_shortcuts[config_HotkeyIndex_ShowMainMenu], i);
 
                         gui_popup_modal_gamepad(i);
 
@@ -1164,6 +1415,30 @@ static void menu_input(void)
             ImGui::EndMenu();
         }
 
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Enable Turbo Tap", "", &config_input.turbo_tap))
+        {
+            emu_set_turbo_tap(config_input.turbo_tap);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("It is recommended to keep this option disabled if");
+            ImGui::Text("you are using the emulator in single player only.");
+            ImGui::EndTooltip();
+        }
+
+        ImGui::MenuItem("Allow Up+Down / Left+Right", "", &config_input.allow_up_down);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Allow pressing, quickly alternating, or holding");
+            ImGui::Text("both left and right or up and down directions.");
+            ImGui::Text("This may cause movement glitches in certain games.");
+            ImGui::EndTooltip();
+        }
+
         ImGui::EndMenu();
     }
 }
@@ -1174,7 +1449,7 @@ static void menu_audio(void)
     {
         gui_in_use = true;
 
-        if (ImGui::MenuItem("Enable Audio", "", &config_audio.enable))
+        if (ImGui::MenuItem("Enable Audio", config_hotkeys[config_HotkeyIndex_Mute].str, &config_audio.enable))
         {
             emu_audio_mute(!config_audio.enable);
         }
@@ -1189,6 +1464,25 @@ static void menu_audio(void)
             ImGui::Text("When enabled, this option will emulate the HuC6280A audio chip.");
             ImGui::Text("This chip will reduce clicks and pops in the audio output.");
             ImGui::EndTooltip();
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::BeginMenu("Master Volume", config_audio.enable))
+        {
+            ImGui::PushItemWidth(200.0f);
+            if (ImGui::SliderFloat("##master_volume", &config_audio.master_volume, 0.0f, 2.0f, "Volume = %.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                emu_audio_set_master_volume(config_audio.master_volume);
+            }
+            ImGui::PopItemWidth();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::Text("Anything above 1.00 may cause clipping.");
+                ImGui::EndTooltip();
+            }
+            ImGui::EndMenu();
         }
 
         ImGui::Separator();
@@ -1284,16 +1578,16 @@ static void menu_audio(void)
             ImGui::EndMenu();
         }
 
-        if (ImGui::MenuItem("Sync With Emulator", "", &config_audio.sync))
-        {
-            config_emulator.ffwd = false;
+        // if (ImGui::MenuItem("Sync With Emulator", "", &config_audio.sync))
+        // {
+        //     config_emulator.ffwd = false;
 
-            if (!config_audio.sync)
-            {
-                config_video.sync = false;
-                display_set_vsync(false);
-            }
-        }
+        //     if (!config_audio.sync)
+        //     {
+        //         config_video.sync = false;
+        //         display_set_vsync(false);
+        //     }
+        // }
 
 #ifndef GG_DISABLE_VGMRECORDER
         ImGui::Separator();
@@ -1577,6 +1871,10 @@ static void menu_debug(void)
             ImGui::EndMenu();
         }
 
+        ImGui::Separator();
+
+        ImGui::MenuItem("Show Rewind", "", &config_debug.show_rewind, config_debug.debug);
+
 #if defined(__APPLE__) || defined(_WIN32)
         ImGui::Separator();
         ImGui::MenuItem("Multi-Viewport", "", &config_debug.multi_viewport, config_debug.debug);
@@ -1622,6 +1920,42 @@ static void menu_about(void)
     }
 }
 
+static void draw_mcp_status(void)
+{
+    if (!emu_mcp_is_running())
+        return;
+
+    char status[64];
+    ImVec4 color(0.10f, 0.90f, 0.10f, 1.0f);
+
+    int transport_mode = emu_mcp_get_transport_mode();
+    if (transport_mode == 0)
+    {
+        snprintf(status, sizeof(status), "MCP: STDIO");
+        color = ImVec4(0.90f, 0.70f, 0.10f, 1.0f);
+    }
+    else if (transport_mode == 1)
+    {
+        snprintf(status, sizeof(status), "MCP: HTTP (%d)", config_emulator.mcp_tcp_port);
+    }
+    else
+    {
+        return;
+    }
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    float text_width = ImGui::CalcTextSize(status).x;
+    float status_x = ImGui::GetWindowWidth() - text_width - style.ItemSpacing.x - 10.0f;
+    float cursor_x = ImGui::GetCursorPosX();
+
+    if (status_x <= cursor_x + style.ItemSpacing.x)
+        return;
+
+    ImGui::SameLine(status_x);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(color, "%s", status);
+}
+
 static void file_dialogs(void)
 {
     gui_file_dialog_process_results();
@@ -1659,6 +1993,13 @@ static void file_dialogs(void)
         gui_file_dialog_save_debug_settings();
     if (load_debug_settings)
         gui_file_dialog_load_debug_settings();
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    if (open_physical_cdrom)
+    {
+        Debug("Opening physical CD-ROM popup from menu request");
+        gui_popup_open_physical_cdrom();
+    }
+#endif
     if (open_about)
     {
         gui_dialog_in_use = true;
@@ -1673,6 +2014,19 @@ static void file_dialogs(void)
 
     gui_popup_modal_about();
     gui_popup_modal_load_defaults();
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    gui_popup_modal_physical_cdrom();
+#endif
+}
+
+static const char* get_current_media_directory_text(void)
+{
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    if (!emu_is_empty() && emu_get_core()->GetMedia()->IsPhysicalCdRom())
+        return config_root_path;
+#endif
+
+    return emu_get_core()->GetMedia()->GetFileDirectory();
 }
 
 static void keyboard_configuration_item(const char* text, SDL_Scancode* key, int player)

@@ -20,11 +20,13 @@
 #include <assert.h>
 #include <stdlib.h>
 #include "huc6260.h"
+#include "trace_logger.h"
 
 HuC6260::HuC6260(HuC6202* huc6202, HuC6280* huc6280)
 {
     m_huc6280 = huc6280;
     m_huc6202 = huc6202;
+    InitPointer(m_trace_logger);
     m_pixel_format = GG_PIXEL_RGBA8888;
     m_state.CR = &m_control_register;
     m_state.CTA = &m_color_table_address;
@@ -60,6 +62,11 @@ void HuC6260::Init(GG_Pixel_Format pixel_format)
     Reset();
 }
 
+void HuC6260::SetTraceLogger(TraceLogger* trace_logger)
+{
+    m_trace_logger = trace_logger;
+}
+
 void HuC6260::InitPalettes()
 {
     for (int i = 0; i < 512; i++)
@@ -90,10 +97,9 @@ void HuC6260::InitPalettes()
         m_rgba888_palette[1][i][2] = k_rgb888_palette_composite[i][2];
         m_rgba888_palette[1][i][3] = 255;
 
-        green = k_rgb888_palette_composite[i][1] * 63 / 255;
-        red = k_rgb888_palette_composite[i][0] * 31 / 255;
-        blue = k_rgb888_palette_composite[i][2] * 31 / 255;
-        rgb565 = (red << 11) | (green << 5) | blue;
+        rgb565 = PackRGB565(k_rgb888_palette_composite[i][0],
+                            k_rgb888_palette_composite[i][1],
+                            k_rgb888_palette_composite[i][2]);
         m_rgb565_palette[1][i] = rgb565;
     }
 }
@@ -116,7 +122,7 @@ void HuC6260::Reset()
     m_black_and_white = 0;
     m_active_line = false;
 
-    for (int i = 0; i < 512; i++)
+    for (int i = 0; i < 256; i++)
     {
         if (m_reset_value < 0)
         {
@@ -130,14 +136,17 @@ void HuC6260::Reset()
             m_color_table[i] = m_reset_value & 0x1FF;
     }
 
+    memcpy(m_color_table + 256, m_color_table, 256 * sizeof(u16));
+
     CalculateScreenBounds();
 }
 
 u8 HuC6260::ReadRegister(u16 address)
 {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER, address & 0x07, true);
-#endif
+    GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+        HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER,
+        address & 0x07,
+        true);
 
     u8 ret = 0xFF;
 
@@ -149,9 +158,10 @@ u8 HuC6260::ReadRegister(u16 address)
             break;
         case 5:
             // Color table data MSB
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM, m_color_table_address, true);
-#endif
+            GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+                HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM,
+                m_color_table_address,
+                true);
             ret = 0xFE | ((m_color_table[m_color_table_address] >> 8) & 0x01);
             m_color_table_address = (m_color_table_address + 1) & 0x01FF;
             break;
@@ -162,9 +172,10 @@ u8 HuC6260::ReadRegister(u16 address)
 
 void HuC6260::WriteRegister(u16 address, u8 value)
 {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER, address & 0x07, false);
-#endif
+    GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+        HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER,
+        address & 0x07,
+        false);
 
     switch (address & 0x07)
     {
@@ -201,6 +212,17 @@ void HuC6260::WriteRegister(u16 address, u8 value)
                     m_clock_divider = 2;
                     break;
             }
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+            if (m_trace_logger->IsEnabled(TRACE_VCE))
+            {
+                GG_Trace_Entry e = {};
+                e.type = TRACE_VCE;
+                e.vce.event = TRACE_VCE_CONTROL_WRITE;
+                e.vce.value = m_control_register;
+                m_trace_logger->TraceLog(e);
+            }
+#endif
             break;
         }
         case 2:
@@ -217,10 +239,23 @@ void HuC6260::WriteRegister(u16 address, u8 value)
             break;
         case 5:
             // Color table data MSB
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM, m_color_table_address, false);
-#endif
+            GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+                HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM,
+                m_color_table_address,
+                false);
             m_color_table[m_color_table_address] = (m_color_table[m_color_table_address] & 0x00FF) | ((value & 0x01) << 8);
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+            if (m_trace_logger->IsEnabled(TRACE_VCE))
+            {
+                GG_Trace_Entry e = {};
+                e.type = TRACE_VCE;
+                e.vce.event = TRACE_VCE_COLOR_WRITE;
+                e.vce.reg = (u8)(m_color_table_address & 0xFF);
+                e.vce.value = m_color_table[m_color_table_address];
+                m_trace_logger->TraceLog(e);
+            }
+#endif
             m_color_table_address = (m_color_table_address + 1) & 0x01FF;
             break;
         default:
@@ -246,7 +281,7 @@ void HuC6260::AdjustForMultipleDividers()
 
     int dominant_width = k_huc6260_scaling_width[m_overscan];
     u8* src_ptr = m_frame_buffer;
-    int end_line = 242 - m_scanline_start;
+    int end_line = GetCurrentHeight();
 
     for (int line = 0; line < end_line; line++)
     {
@@ -279,7 +314,7 @@ void HuC6260::AdjustForMultipleDividers()
                 }
             }
             memcpy(dest_line + ((original_line_width * 3) * bytes_per_pixel),
-                   src_ptr + (original_line_width * bytes_per_pixel),
+                   src_ptr + ((original_line_width - 1) * bytes_per_pixel),
                    bytes_per_pixel);
             break;
         default:
@@ -314,10 +349,7 @@ void HuC6260::SetCustomPalette(const u8* data)
         m_rgba888_palette[2][i][2] = blue;
         m_rgba888_palette[2][i][3] = 255;
 
-        u8 green565 = green * 63 / 255;
-        u8 red565 = red * 31 / 255;
-        u8 blue565 = blue * 31 / 255;
-        u16 rgb565 = (red565 << 11) | (green565 << 5) | blue565;
+        u16 rgb565 = PackRGB565(red, green, blue);
         m_rgb565_palette[2][i] = rgb565;
     }
 }
@@ -396,10 +428,10 @@ void HuC6260::ApplyLowPassFilter()
 
             if (bytes_per_pixel == 2)
             {
-                u8 r8 = (u8)r;
-                u8 g8 = (u8)g;
-                u8 b8 = (u8)b;
-                u16 pixel = ((r8 * 31 / 255) << 11) | ((g8 * 63 / 255) << 5) | (b8 * 31 / 255);
+                u8 r8 = RoundToByte(r);
+                u8 g8 = RoundToByte(g);
+                u8 b8 = RoundToByte(b);
+                u16 pixel = PackRGB565(r8, g8, b8);
                 *reinterpret_cast<u16*>(m_frame_buffer + idx) = pixel;
             }
             else

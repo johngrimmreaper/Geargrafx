@@ -23,10 +23,14 @@
 #include <vector>
 #include "common.h"
 
+//#define SCSI_DEBUG(...) { }
+#define SCSI_DEBUG(x, ...) Debug(x, ## __VA_ARGS__)
+
 class CdRom;
 class CdRomMedia;
 class CdRomAudio;
 class HuC6280;
+class TraceLogger;
 
 class ScsiController
 {
@@ -131,8 +135,9 @@ public:
     void StartStatus(ScsiStatus status, u8 length = 1);
     bool IsDataReady();
     Scsi_State* GetState();
+    void SetTraceLogger(TraceLogger* trace_logger);
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
     void SetPhase(ScsiPhase phase);
@@ -159,6 +164,8 @@ private:
     u8 CommandLength(ScsiCommand command);
     void LoadSector();
     u32 AudioLBA();
+    void TraceEvent(u8 event, u8 command = 0, u8 phase = 0, u8 status = 0, u32 param = 0);
+    void TraceProblem(u8 event, u8 problem, u8 command = 0, u32 param = 0);
 
 private:
     Scsi_State m_state;
@@ -166,6 +173,7 @@ private:
     CdRom* m_cdrom;
     CdRomMedia* m_cdrom_media;
     CdRomAudio* m_cdrom_audio;
+    TraceLogger* m_trace_logger;
     ScsiBus m_bus;
     ScsiPhase m_phase;
     ScsiEvent m_next_event;

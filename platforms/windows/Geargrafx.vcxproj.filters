@@ -7,6 +7,9 @@
     <ClCompile Include="..\shared\desktop\application.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\desktop\application_headless.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\desktop\config.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
@@ -17,6 +20,9 @@
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_actions.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\rewind.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_debug.cpp">
@@ -67,6 +73,9 @@
     <ClCompile Include="..\shared\desktop\gui_debug_trace_logger.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_debug_rewind.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_popups.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
@@ -83,6 +92,15 @@
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\ogl_renderer.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\ogl_shader_program.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\ogl_shader_chain.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\shader_preset.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\display.cpp">
@@ -122,6 +140,15 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\cdrom.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_drive.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_physical_image.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_drive_win32.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\scsi_controller.cpp">
@@ -166,6 +193,9 @@
     <ClCompile Include="..\..\src\vgm_recorder.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\trace_logger.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\huc6202.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -176,6 +206,12 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\cdrom_cuebin_image.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_file.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_file_native.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\cdrom_image.cpp">
@@ -246,6 +282,9 @@
     <ClInclude Include="..\shared\desktop\application.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\application_headless.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\desktop\backers.h">
       <Filter>desktop</Filter>
     </ClInclude>
@@ -262,6 +301,9 @@
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_actions.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\rewind.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug.h">
@@ -330,6 +372,9 @@
     <ClInclude Include="..\shared\desktop\gui_debug_trace_logger.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_debug_rewind.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_widgets.h">
       <Filter>desktop</Filter>
     </ClInclude>
@@ -337,6 +382,15 @@
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\ogl_renderer.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\ogl_shader_program.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\ogl_shader_chain.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\shader_preset.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\display.h">
@@ -400,6 +454,12 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\cdrom.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\cdrom_drive.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\cdrom_physical_image.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\cdrom_audio_inline.h">
@@ -504,6 +564,9 @@
     <ClInclude Include="..\..\src\vgm_recorder.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\trace_logger.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\types.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -526,6 +589,12 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\cdrom_cuebin_image.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\cdrom_file.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\cdrom_file_native.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\cdrom_image.h">

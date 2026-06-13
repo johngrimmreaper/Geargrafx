@@ -24,6 +24,7 @@
 #include "media.h"
 #include "game_db.h"
 #include "crc.h"
+#include "cdrom_file.h"
 #include "cdrom_media.h"
 
 Media::Media(CdRomMedia* cdrom_media)
@@ -34,6 +35,7 @@ Media::Media(CdRomMedia* cdrom_media)
     m_card_ram_size = 0;
     m_ready = false;
     m_file_path[0] = 0;
+    m_file_directory[0] = 0;
     m_file_name[0] = 0;
     m_file_extension[0] = 0;
     m_temp_path[0] = 0;
@@ -46,6 +48,12 @@ Media::Media(CdRomMedia* cdrom_media)
     m_is_gameexpress = false;
     m_is_sgx = false;
     m_is_cdrom = false;
+    m_is_in_game_database = false;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    m_is_physical_cdrom = false;
+    m_physical_cdrom_device_id[0] = 0;
+#endif
+    m_is_mb128 = false;
     m_is_valid_bios_syscard = false;
     m_is_valid_bios_gameexpress = false;
     m_is_loaded_bios_syscard = false;
@@ -58,14 +66,19 @@ Media::Media(CdRomMedia* cdrom_media)
     m_preload_cdrom = false;
 
     m_rom_map = new u8*[128];
+    m_rom_bank_offset = new u32[128];
     for (int i = 0; i < 128; i++)
+    {
         InitPointer(m_rom_map[i]);
+        m_rom_bank_offset[i] = 0;
+    }
 }
 
 Media::~Media()
 {
     SafeDeleteArray(m_rom);
     SafeDeleteArray(m_rom_map);
+    SafeDeleteArray(m_rom_bank_offset);
 }
 
 void Media::Init()
@@ -80,6 +93,7 @@ void Media::Reset()
     m_card_ram_size = 0;
     m_ready = false;
     m_file_path[0] = 0;
+    m_file_directory[0] = 0;
     m_file_name[0] = 0;
     m_file_extension[0] = 0;
     m_crc = 0;
@@ -87,12 +101,20 @@ void Media::Reset()
     m_is_gameexpress = false;
     m_is_sgx = false;
     m_is_cdrom = false;
+    m_is_in_game_database = false;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    m_is_physical_cdrom = false;
+    m_physical_cdrom_device_id[0] = 0;
+#endif
     m_is_mb128 = false;
     m_mapper = STANDARD_MAPPER;
     m_avenue_pad_3_button = GG_KEY_SELECT;
 
     for (int i = 0; i < 128; i++)
+    {
         InitPointer(m_rom_map[i]);
+        m_rom_bank_offset[i] = 0;
+    }
 
     m_cdrom_media->Reset();
 }
@@ -210,15 +232,20 @@ bool Media::LoadHuCardFromBuffer(const u8* buffer, int size, const char* path)
         buffer += 512;
     }
 
-    assert((size % 0x2000) == 0);
-    if ((size % 0x2000) != 0)
+    if (size <= 0)
     {
         Error("Invalid size found: %d (0x%X) bytes", size, size);
+        return false;
     }
 
-    m_rom_size = size;
+    m_rom_size = (size + 0x1FFF) & ~0x1FFF;
+
+    if (m_rom_size != size)
+        Log("WARNING: HuCard size %d (0x%X) is not 8KB aligned. Padding to %d (0x%X) bytes", size, size, m_rom_size, m_rom_size);
+
     m_rom = new u8[m_rom_size];
-    memcpy(m_rom, buffer, m_rom_size);
+    memset(m_rom, 0xFF, m_rom_size);
+    memcpy(m_rom, buffer, size);
     m_ready = true;
 
     Debug("HuCard loaded from buffer. Size: %d bytes", m_rom_size);
@@ -237,6 +264,61 @@ bool Media::LoadChdFromFile(const char* path)
     m_ready = m_cdrom_media->LoadChdFromFile(path, m_preload_cdrom);
     return m_ready;
 }
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+bool Media::LoadPhysicalCdRom(const char* device_id)
+{
+    if (!IsValidPointer(device_id) || (device_id[0] == 0))
+    {
+        Error("Invalid physical CD-ROM device id");
+        return false;
+    }
+
+    Log("Loading physical CD-ROM %s...", device_id);
+
+    Reset();
+
+    m_is_cdrom = true;
+    m_is_physical_cdrom = true;
+    strncpy_fit(m_physical_cdrom_device_id, device_id, sizeof(m_physical_cdrom_device_id));
+
+    m_ready = m_cdrom_media->LoadPhysicalDrive(device_id, m_preload_cdrom);
+    if (!m_ready)
+    {
+        Reset();
+        return false;
+    }
+
+    m_crc = m_cdrom_media->GetCRC();
+
+    if (m_crc != 0)
+    {
+        snprintf(m_file_name, sizeof(m_file_name), "physical_cdrom_%08X.physicalcd", m_crc);
+    }
+    else
+    {
+        char sanitized[128] = {};
+        int pos = 0;
+        for (int i = 0; (device_id[i] != 0) && (pos < ((int)sizeof(sanitized) - 1)); i++)
+        {
+            char c = device_id[i];
+            bool valid = ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9'));
+            sanitized[pos++] = valid ? c : '_';
+        }
+
+        if (pos == 0)
+            strncpy_fit(sanitized, "unknown", sizeof(sanitized));
+
+        snprintf(m_file_name, sizeof(m_file_name), "physical_cdrom_%s.physicalcd", sanitized);
+    }
+
+    strncpy_fit(m_file_path, m_file_name, sizeof(m_file_path));
+    m_file_directory[0] = 0;
+    strncpy_fit(m_file_extension, "physicalcd", sizeof(m_file_extension));
+
+    return true;
+}
+#endif
 
 bool Media::LoadBios(const char* file_path, bool syscard)
 {
@@ -395,6 +477,8 @@ bool Media::LoadMediaFromZipFile(const char* path)
         }
     }
 
+    mz_zip_reader_end(&zip_archive);
+
     Error("No valid ROM or CUE file found in ZIP archive %s", path);
 
     return false;
@@ -493,17 +577,17 @@ void Media::GatherMediaInfoFromDB()
 {
     m_card_ram_size = 0;
     m_is_sgx = false;
+    m_is_in_game_database = false;
 
     int i = 0;
-    bool found = false;
 
-    while(!found && (k_game_database[i].title != 0))
+    while(!m_is_in_game_database && (k_game_database[i].title != 0))
     {
         u32 db_crc = k_game_database[i].crc;
 
         if (db_crc == m_crc)
         {
-            found = true;
+            m_is_in_game_database = true;
             Log("Media found in database: %s. CRC: %08X", k_game_database[i].title, m_crc);
 
             if (k_game_database[i].flags & GG_GAMEDB_CARD_RAM_8000)
@@ -567,7 +651,7 @@ void Media::GatherMediaInfoFromDB()
             i++;
     }
 
-    if (!found)
+    if (!m_is_in_game_database)
     {
         Debug("Media not found in database. CRC: %08X", m_crc);
     }
@@ -575,33 +659,31 @@ void Media::GatherMediaInfoFromDB()
 
 void Media::GatherBIOSInfoFromDB(bool syscard)
 {
-    int i = 0;
     bool found = false;
 
     u32* bios_crc = syscard ? &m_bios_crc_syscard : &m_bios_crc_gameexpress;
     char* bios_name = syscard ? m_bios_name_syscard : m_bios_name_gameexpress;
     bool* is_valid_bios = syscard ? &m_is_valid_bios_syscard : &m_is_valid_bios_gameexpress;
 
-    while(!found && (k_game_database[i].title != 0))
+    for (int i = 0; !found && (k_game_database[i].title != 0); i++)
     {
-        u32 db_crc = k_game_database[i].crc;
+        const GG_DB_Entry& db_entry = k_game_database[i];
+        u32 db_crc = db_entry.crc;
 
         if (db_crc == *bios_crc)
         {
-            if (syscard && !(k_game_database[i].flags & GG_GAMEDB_BIOS_SYSCARD))
+            if (syscard && !(db_entry.flags & GG_GAMEDB_BIOS_SYSCARD))
                 continue;
 
-            if (!syscard && !(k_game_database[i].flags & GG_GAMEDB_BIOS_GAME_EXPRESS))
+            if (!syscard && !(db_entry.flags & GG_GAMEDB_BIOS_GAME_EXPRESS))
                 continue;
 
             found = true;
             *is_valid_bios = true;
-            strncpy_fit(bios_name, k_game_database[i].title, 64);
+            strncpy_fit(bios_name, db_entry.title, 64);
 
-            Log("BIOS found in database: %s. CRC: %08X", k_game_database[i].title, db_crc);
+            Log("BIOS found in database: %s. CRC: %08X", db_entry.title, db_crc);
         }
-        else
-            i++;
     }
 
     if (!found)
@@ -658,6 +740,7 @@ void Media::InitRomMAP()
             int bank = x & 0x1F;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
 
         for(int x = 64; x < 128; x++)
@@ -665,6 +748,7 @@ void Media::InitRomMAP()
             int bank = (x & 0x0F) + 0x20;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
     }
     else if (rom_bank_count == 0x40)
@@ -676,6 +760,7 @@ void Media::InitRomMAP()
             int bank = x & 0x3F;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
 
         for(int x = 64; x < 128; x++)
@@ -683,6 +768,7 @@ void Media::InitRomMAP()
             int bank = (x & 0x1F) + 0x20;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
     }
     else if (rom_bank_count == 0x60)
@@ -694,6 +780,7 @@ void Media::InitRomMAP()
             int bank = x & 0x3F;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
 
         for(int x = 64; x < 128; x++)
@@ -701,6 +788,7 @@ void Media::InitRomMAP()
             int bank = (x & 0x1F) + 0x40;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
     }
     else
@@ -712,42 +800,40 @@ void Media::InitRomMAP()
             int bank = x % rom_bank_count;
             int bank_address = bank * 0x2000;
             m_rom_map[x] = &rom_ptr[bank_address];
+            m_rom_bank_offset[x] = bank_address;
         }
     }
 }
 
 bool Media::IsValidFile(const char* path)
 {
-    using namespace std;
-
     if (!IsValidPointer(path))
     {
         Error("Invalid path %s", path);
         return false;
     }
 
-    ifstream file;
-    open_ifstream_utf8(file, path, ios::in | ios::binary | ios::ate);
+    CdRomFile* file = CdRomFile::OpenFile(path);
 
-    if (file.is_open())
+    if (file)
     {
-        int size = static_cast<int> (file.tellg());
+        s64 size = file->GetSize();
 
         if (size <= 0)
         {
-            Error("Unable to open file %s. Size: %d", path, size);
-            file.close();
+            Error("Unable to open file %s. Size: %lld", path, (long long)size);
+            SafeDelete(file);
             return false;
         }
 
-        if (file.bad() || file.fail() || !file.good() || file.eof())
+        if (!file->IsValid())
         {
             Error("Unable to open file %s. Bad file!", path);
-            file.close();
+            SafeDelete(file);
             return false;
         }
 
-        file.close();
+        SafeDelete(file);
         return true;
     }
     else

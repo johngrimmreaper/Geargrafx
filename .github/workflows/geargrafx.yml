@@ -35,17 +35,17 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Update OS
       run: sudo apt-get update -qq
     - name: Install dependencies
       run: |
-        sudo apt-get install -y build-essential cmake libgtk-3-dev \
+        sudo apt-get install -y build-essential cmake \
         libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
         libxi-dev libxss-dev libxkbcommon-dev libwayland-dev libdecor-0-dev \
-        libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev
+        libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev libxtst-dev
     - name: Build and install SDL3
       env:
         GH_TOKEN: ${{ github.token }}
@@ -65,12 +65,14 @@ jobs:
     - name: Prepare artifact directory
       run: |
         mkdir -p artifact/mcp
+        mkdir -p artifact/shaders
         cp platforms/shared/README.txt artifact
         cp platforms/shared/gamecontrollerdb.txt artifact
         cp platforms/linux/${{ env.NAME_LOWER }} artifact
         cp -r platforms/shared/desktop/mcp/resources artifact/mcp/
+        cp -r platforms/shared/desktop/shaders/* artifact/shaders/
     - name: Archive binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-desktop-${{ matrix.artifact_name }}
         path: artifact/*
@@ -81,17 +83,17 @@ jobs:
       contents: read
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Update OS
       run: sudo apt-get update -qq
     - name: Install dependencies
       run: |
-        sudo apt-get install -y build-essential cmake libgtk-3-dev \
+        sudo apt-get install -y build-essential cmake \
         libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
         libxi-dev libxss-dev libxkbcommon-dev libwayland-dev libdecor-0-dev \
-        libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev
+        libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev libxtst-dev
     - name: Build and install SDL3
       env:
         GH_TOKEN: ${{ github.token }}
@@ -118,7 +120,7 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Get build number
@@ -128,7 +130,7 @@ jobs:
       run: make
       working-directory: platforms/libretro
     - name: Archive binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-libretro-linux-x64
         path: platforms/libretro/${{ env.NAME_LOWER }}_libretro.so
@@ -148,7 +150,7 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Install dependencies
@@ -201,7 +203,7 @@ jobs:
         ditto -c -k --keepParent "platforms/macos/${{ env.NAME_UPPER }}.app" "platforms/macos/${{ env.NAME_UPPER }}.app.zip"
         mv platforms/macos/${{ env.NAME_UPPER }}.app.zip artifact/
     - name: Archive binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-desktop-macos-${{ matrix.architecture == 'arm' && 'arm64' || 'intel' }}
         path: artifact/*
@@ -216,11 +218,11 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Setup msbuild
-      uses: microsoft/setup-msbuild@v2
+      uses: microsoft/setup-msbuild@v3
     - name: Download SDL3 development libraries
       shell: bash
       env:
@@ -242,13 +244,15 @@ jobs:
     - name: Prepare artifact directory
       run: |
         mkdir -p artifact/mcp
+        mkdir -p artifact/shaders
         cp platforms/shared/README.txt artifact
         cp platforms/shared/gamecontrollerdb.txt artifact
         cp platforms/windows/dependencies/SDL3/lib/${{ matrix.architecture }}/SDL3.dll artifact
         cp platforms/windows/release/${{ env.NAME_UPPER }}.exe artifact
         cp -r platforms/shared/desktop/mcp/resources artifact/mcp/
+        cp -r platforms/shared/desktop/shaders/* artifact/shaders/
     - name: Archive binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-desktop-windows-${{ matrix.architecture }}
         path: artifact/*
@@ -260,7 +264,7 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Get build number
@@ -271,19 +275,21 @@ jobs:
       uses: vmactions/freebsd-vm@v1
       with:
         usesh: true
-        prepare: pkg install -y git gmake pkgconf sdl3 lang/gcc gtk3
+        prepare: pkg install -y git gmake pkgconf sdl3 lang/gcc
         run: |
           cd platforms/bsd
           gmake
     - name: Prepare artifact directory
       run: |
         mkdir -p artifact/mcp
+        mkdir -p artifact/shaders
         cp platforms/shared/README.txt artifact
         cp platforms/shared/gamecontrollerdb.txt artifact
         cp platforms/bsd/${{ env.NAME_LOWER }} artifact
         cp -r platforms/shared/desktop/mcp/resources artifact/mcp/
+        cp -r platforms/shared/desktop/shaders/* artifact/shaders/
     - name: Archive binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-desktop-bsd-x64
         path: artifact/*
@@ -305,20 +311,21 @@ jobs:
           - { platform: linux, arch: arm64, os: ubuntu-24.04-arm, artifact_name: ubuntu24.04-arm64 }
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Get build number
       run: |
         echo "BUILD_NUMBER=$(git describe --abbrev=7 --dirty --always --tags)" >> $GITHUB_ENV
     - name: Download artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-desktop-${{ matrix.variant.platform == 'darwin' && format('macos-{0}', matrix.variant.architecture == 'arm' && 'arm64' || 'intel') || matrix.variant.platform == 'linux' && matrix.variant.artifact_name || format('windows-{0}', matrix.variant.architecture) }}
         path: download
     - name: Prepare MCPB structure
       run: |
         mkdir -p mcpb/server
+        mkdir -p mcpb/server/shaders
         mkdir -p mcpb/mcp/resources
 
         cp platforms/shared/desktop/mcp/icon.png mcpb/icon.png
@@ -328,15 +335,18 @@ jobs:
           unzip -q ${{ env.NAME_UPPER }}.app.zip
           cd ..
           cp download/${{ env.NAME_UPPER }}.app/Contents/MacOS/${{ env.NAME_LOWER }} mcpb/server/
+          cp -r download/${{ env.NAME_UPPER }}.app/Contents/Resources/shaders/* mcpb/server/shaders/
           cp platforms/shared/gamecontrollerdb.txt mcpb/
           cp -r platforms/shared/desktop/mcp/resources/* mcpb/mcp/resources/
         elif [ "${{ matrix.variant.platform }}" = "win32" ]; then
           cp download/${{ env.NAME_UPPER }}.exe mcpb/server/
           cp download/SDL3.dll mcpb/server/
+          cp -r download/shaders/* mcpb/server/shaders/
           cp download/gamecontrollerdb.txt mcpb/
           cp -r download/mcp/resources/* mcpb/mcp/resources/
         else
           cp download/${{ env.NAME_LOWER }} mcpb/server/
+          cp -r download/shaders/* mcpb/server/shaders/
           cp download/gamecontrollerdb.txt mcpb/
           cp -r download/mcp/resources/* mcpb/mcp/resources/
         fi
@@ -369,7 +379,7 @@ jobs:
         fi
         zip -r ../${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-mcpb-${PLATFORM_NAME}-${{ matrix.variant.arch }}.mcpb *
     - name: Archive MCPB
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-mcpb-${{ matrix.variant.platform == 'darwin' && 'macos' || matrix.variant.platform == 'win32' && 'windows' || matrix.variant.platform }}-${{ matrix.variant.arch }}
         path: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-mcpb-${{ matrix.variant.platform == 'darwin' && 'macos' || matrix.variant.platform == 'win32' && 'windows' || matrix.variant.platform }}-${{ matrix.variant.arch }}.mcpb
@@ -382,7 +392,7 @@ jobs:
       contents: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
     - name: Get build number
@@ -392,7 +402,7 @@ jobs:
       run: |
         mkdir -p release
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: ${{ env.NAME_UPPER }}-${{ env.BUILD_NUMBER }}-*
         path: release

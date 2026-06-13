@@ -28,8 +28,10 @@ HuC6280PSG::HuC6280PSG()
     InitPointer(m_ch);
     m_huc6280a = true;
     m_dc_offset = 16;
-    m_hpf_prev_input = 0.0f;
-    m_hpf_prev_output = 0.0f;
+    m_hpf_prev_input[0] = 0.0f;
+    m_hpf_prev_input[1] = 0.0f;
+    m_hpf_prev_output[0] = 0.0f;
+    m_hpf_prev_output[1] = 0.0f;
 }
 
 HuC6280PSG::~HuC6280PSG()
@@ -64,11 +66,12 @@ void HuC6280PSG::Reset()
 {
     m_elapsed_cycles = 0;
     m_buffer_index = 0;
-    m_sample_cycle_counter = 0;
     m_frame_samples = 0;
 
-    m_hpf_prev_input = 0.0f;
-    m_hpf_prev_output = 0.0f;
+    m_hpf_prev_input[0] = 0.0f;
+    m_hpf_prev_input[1] = 0.0f;
+    m_hpf_prev_output[0] = 0.0f;
+    m_hpf_prev_output[1] = 0.0f;
 
     m_channel_select = 0;
     m_main_vol = 0;
@@ -235,7 +238,7 @@ void HuC6280PSG::Sync()
 
     while (remaining_cycles > 0)
     {
-        int batch_size = MIN(remaining_cycles, GG_PSG_CYCLES_PER_SAMPLE - m_sample_cycle_counter);
+        int batch_size = remaining_cycles;
         remaining_cycles -= batch_size;
 
         for (int i = 0; i < 6; i++)
@@ -367,26 +370,25 @@ void HuC6280PSG::Sync()
             }
         }
 
-        m_sample_cycle_counter += batch_size;
+    }
+}
 
-        if (m_sample_cycle_counter >= GG_PSG_CYCLES_PER_SAMPLE)
-        {
-            m_sample_cycle_counter -= GG_PSG_CYCLES_PER_SAMPLE;
+void HuC6280PSG::Sample()
+{
+    Sync();
 
-            for (int i = 0; i < 6; i++)
-            {
-                m_channels[i].output[m_buffer_index + 0] = m_channels[i].left_sample;
-                m_channels[i].output[m_buffer_index + 1] = m_channels[i].right_sample;
-            }
+    for (int i = 0; i < 6; i++)
+    {
+        m_channels[i].output[m_buffer_index + 0] = m_channels[i].left_sample;
+        m_channels[i].output[m_buffer_index + 1] = m_channels[i].right_sample;
+    }
 
-            m_buffer_index += 2;
+    m_buffer_index += 2;
 
-            if (m_buffer_index >= GG_AUDIO_BUFFER_SIZE)
-            {
-                Error("PSG buffer overflow");
-                m_buffer_index = 0;
-            }
-        }
+    if (m_buffer_index >= GG_AUDIO_BUFFER_SIZE)
+    {
+        Error("PSG buffer overflow");
+        m_buffer_index = 0;
     }
 }
 
@@ -413,15 +415,16 @@ int HuC6280PSG::EndFrame(s16* sample_buffer)
             }
             else
             {
+                int channel = s & 0x01;
                 float raw = 0.0f;
                 for (int i = 0; i < 6; i++)
                     raw += m_channels[i].output[s];
 
                 const float hpf_r = 0.9985f;
-                float outSample = raw - m_hpf_prev_input + hpf_r * m_hpf_prev_output;
+                float outSample = raw - m_hpf_prev_input[channel] + hpf_r * m_hpf_prev_output[channel];
 
-                m_hpf_prev_input = raw;
-                m_hpf_prev_output = outSample;
+                m_hpf_prev_input[channel] = raw;
+                m_hpf_prev_output[channel] = outSample;
 
                 sample_buffer[s] = (s16)outSample;
             }
@@ -458,7 +461,8 @@ void HuC6280PSG::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_lfo_frequency), sizeof(m_lfo_frequency));
     stream.write(reinterpret_cast<const char*> (&m_lfo_control), sizeof(m_lfo_control));
     stream.write(reinterpret_cast<const char*> (&m_elapsed_cycles), sizeof(m_elapsed_cycles));
-    stream.write(reinterpret_cast<const char*> (&m_sample_cycle_counter), sizeof(m_sample_cycle_counter));
+    stream.write(reinterpret_cast<const char*> (&m_frame_samples), sizeof(m_frame_samples));
+    stream.write(reinterpret_cast<const char*> (&m_buffer_index), sizeof(m_buffer_index));
 
     for (int i = 0; i < 6; i++)
     {
@@ -482,10 +486,11 @@ void HuC6280PSG::SaveState(std::ostream& stream)
         stream.write(reinterpret_cast<const char*> (&m_channels[i].dda_enabled), sizeof(m_channels[i].dda_enabled));
         stream.write(reinterpret_cast<const char*> (&m_channels[i].left_sample), sizeof(m_channels[i].left_sample));
         stream.write(reinterpret_cast<const char*> (&m_channels[i].right_sample), sizeof(m_channels[i].right_sample));
+        stream.write(reinterpret_cast<const char*> (m_channels[i].output), sizeof(m_channels[i].output));
     }
 
-    stream.write(reinterpret_cast<const char*> (&m_hpf_prev_input), sizeof(m_hpf_prev_input));
-    stream.write(reinterpret_cast<const char*> (&m_hpf_prev_output), sizeof(m_hpf_prev_output));
+    stream.write(reinterpret_cast<const char*> (m_hpf_prev_input), sizeof(m_hpf_prev_input));
+    stream.write(reinterpret_cast<const char*> (m_hpf_prev_output), sizeof(m_hpf_prev_output));
 }
 
 void HuC6280PSG::LoadState(std::istream& stream, int version)
@@ -498,7 +503,27 @@ void HuC6280PSG::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_lfo_frequency), sizeof(m_lfo_frequency));
     stream.read(reinterpret_cast<char*> (&m_lfo_control), sizeof(m_lfo_control));
     stream.read(reinterpret_cast<char*> (&m_elapsed_cycles), sizeof(m_elapsed_cycles));
-    stream.read(reinterpret_cast<char*> (&m_sample_cycle_counter), sizeof(m_sample_cycle_counter));
+
+    if (version < 32)
+    {
+        s32 sample_cycle_counter = 0;
+        stream.read(reinterpret_cast<char*> (&sample_cycle_counter), sizeof(sample_cycle_counter));
+    }
+
+    if (version >= 27)
+    {
+        stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));
+        stream.read(reinterpret_cast<char*> (&m_buffer_index), sizeof(m_buffer_index));
+
+        m_buffer_index = CLAMP(m_buffer_index, 0, GG_AUDIO_BUFFER_SIZE - 2);
+        m_buffer_index &= ~1;
+        m_frame_samples = CLAMP(m_frame_samples, 0, GG_AUDIO_BUFFER_SIZE);
+    }
+    else
+    {
+        m_frame_samples = 0;
+        m_buffer_index = 0;
+    }
 
     for (int i = 0; i < 6; i++)
     {
@@ -522,17 +547,36 @@ void HuC6280PSG::LoadState(std::istream& stream, int version)
         stream.read(reinterpret_cast<char*> (&m_channels[i].dda_enabled), sizeof(m_channels[i].dda_enabled));
         stream.read(reinterpret_cast<char*> (&m_channels[i].left_sample), sizeof(m_channels[i].left_sample));
         stream.read(reinterpret_cast<char*> (&m_channels[i].right_sample), sizeof(m_channels[i].right_sample));
+
+        if (version >= 27)
+            stream.read(reinterpret_cast<char*> (m_channels[i].output), sizeof(m_channels[i].output));
+        else
+            memset(m_channels[i].output, 0, sizeof(m_channels[i].output));
     }
 
-    if (version >= 24)
+    if (version >= 28)
     {
-        stream.read(reinterpret_cast<char*> (&m_hpf_prev_input), sizeof(m_hpf_prev_input));
-        stream.read(reinterpret_cast<char*> (&m_hpf_prev_output), sizeof(m_hpf_prev_output));
+        stream.read(reinterpret_cast<char*> (m_hpf_prev_input), sizeof(m_hpf_prev_input));
+        stream.read(reinterpret_cast<char*> (m_hpf_prev_output), sizeof(m_hpf_prev_output));
+    }
+    else if (version >= 24)
+    {
+        float hpf_prev_input = 0.0f;
+        float hpf_prev_output = 0.0f;
+        stream.read(reinterpret_cast<char*> (&hpf_prev_input), sizeof(hpf_prev_input));
+        stream.read(reinterpret_cast<char*> (&hpf_prev_output), sizeof(hpf_prev_output));
+
+        m_hpf_prev_input[0] = hpf_prev_input;
+        m_hpf_prev_input[1] = hpf_prev_input;
+        m_hpf_prev_output[0] = hpf_prev_output;
+        m_hpf_prev_output[1] = hpf_prev_output;
     }
     else
     {
-        m_hpf_prev_input = 0.0f;
-        m_hpf_prev_output = 0.0f;
+        m_hpf_prev_input[0] = 0.0f;
+        m_hpf_prev_input[1] = 0.0f;
+        m_hpf_prev_output[0] = 0.0f;
+        m_hpf_prev_output[1] = 0.0f;
     }
 
     m_channel_select &= 0x07;

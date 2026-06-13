@@ -20,12 +20,15 @@
 #include <stdlib.h>
 #include <assert.h>
 #include "huc6270.h"
+#include "trace_logger.h"
 
 HuC6270::HuC6270(HuC6280* huC6280)
 {
     m_huc6280 = huC6280;
     InitPointer(m_huc6260);
     InitPointer(m_input_pump_fn);
+    m_chip_id = 0;
+    InitPointer(m_trace_logger);
     m_state.AR = &m_address_register;
     m_state.SR = &m_status_register;
     m_state.R = m_register;
@@ -42,12 +45,18 @@ HuC6270::~HuC6270()
 {
 }
 
-void HuC6270::Init(HuC6260* huC6260, HuC6202* huC6202, GG_Input_Pump_Fn input_pump_fn)
+void HuC6270::Init(HuC6260* huC6260, HuC6202* huC6202, GG_Input_Pump_Fn input_pump_fn, int chip_id)
 {
     m_huc6260 = huC6260;
     m_huc6202 = huC6202;
     m_input_pump_fn = input_pump_fn;
+    m_chip_id = chip_id;
     Reset();
+}
+
+void HuC6270::SetTraceLogger(TraceLogger* trace_logger)
+{
+    m_trace_logger = trace_logger;
 }
 
 void HuC6270::Reset()
@@ -60,17 +69,25 @@ void HuC6270::Reset()
         m_register[HUC6270_REG_VSR] = 0x0F02;
         m_register[HUC6270_REG_VDR] = 0x00EF;
         m_register[HUC6270_REG_VCR] = 0x0004;
+        m_read_buffer = 0x0000;
     }
     else
     {
         m_register[HUC6270_REG_HDR] = 0x1F;
         m_register[HUC6270_REG_VDR] = 239;
+        m_read_buffer = 0xFFFF;
     }
 
     m_address_register = 0;
     m_status_register = 0;
-    m_read_buffer = 0xFFFF;
     m_vram_openbus = 0;
+    m_pending_memory_read = false;
+    m_pending_memory_write = false;
+    m_transfer_delay = 0;
+    m_load_bg_start_clock = HUC6260_LINE_LENGTH;
+    m_load_bg_end_clock = 0;
+    m_hsync_start_clock = 0;
+    m_allow_vram_access = false;
     m_trigger_sat_transfer = false;
     m_sat_transfer_pending = 0;
     m_vram_transfer_pending = 0;
@@ -80,8 +97,13 @@ void HuC6270::Reset()
     m_vpos = 0;
     m_bg_offset_y = 0;
     m_bg_counter_y = 0;
+    m_bg_scroll_y_update_pending = false;
+    m_bxr_written_before_latch = false;
+    m_byr_lsb_write_clock = -1;
     m_increment_bg_counter_y = false;
     m_need_to_increment_raster_line = false;
+    m_latch_clock_y = -1;
+    m_latch_clock_x = -1;
     m_raster_line = 0;
     m_latched_bxr = 0;
     m_latched_hds = HUC6270_VAR_HDS;
@@ -93,6 +115,7 @@ void HuC6270::Reset()
     m_latched_vcr = HUC6270_VAR_VCR;
     m_latched_vsw = HUC6270_VAR_VSW;
     m_latched_mwr = 0;
+    m_latched_cr = HUC6270_VAR_CR;
     m_v_state = HuC6270_VERTICAL_STATE_VDS;
     m_h_state = HuC6270_HORIZONTAL_STATE_HDS;
     m_next_event = HuC6270_EVENT_NONE;
@@ -103,7 +126,6 @@ void HuC6270::Reset()
     m_active_line = false;
     m_burst_mode = false;
     m_line_buffer_index = 0;
-    m_no_sprite_limit = false;
     m_sprite_count = 0;
     m_sprite_overflow = false;
 
@@ -149,40 +171,39 @@ u8 HuC6270::ReadRegister(u16 address)
         // Status register
         case 0:
         {
-            u8 ret = m_status_register & 0x7F;
+            u8 ret = m_status_register & 0x3F;
+            if (HasPendingCpuVramAccess())
+                ret |= HUC6270_STATUS_BUSY;
             m_huc6202->AssertIRQ1(this, false);
-            m_status_register &= 0x40;
+            m_status_register = 0;
+            UpdateCpuVramBusyStatus();
             return ret;
         }
+        // Unused register
+        case 1:
+            return 0x00;
         // Data register (LSB)
         case 2:
         {
-            if (m_address_register != HUC6270_REG_VRR)
-            {
-                Debug("[PC=%04X] HuC6270 invalid data register (LSB) read: %02X", m_huc6280->GetState()->PC->GetValue(), m_address_register);
-            }
+            if (m_pending_memory_read)
+                WaitForVramAccess();
+
             return m_read_buffer & 0xFF;
         }
         // Data register (MSB)
         case 3:
         {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6270_REGISTER, m_address_register, true);
-#endif
+            if (m_pending_memory_read)
+                WaitForVramAccess();
+
+            GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+                HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6270_REGISTER,
+                m_address_register,
+                true);
             u8 ret = m_read_buffer >> 8;
 
             if (m_address_register == HUC6270_REG_VRR)
-            {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-                m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_VRAM, m_register[HUC6270_REG_MARR], true);
-#endif
-                m_read_buffer = ReadVRAM(m_register[HUC6270_REG_MARR]);
-                m_register[HUC6270_REG_MARR] += k_huc6270_read_write_increment[(m_register[HUC6270_REG_CR] >> 11) & 0x03];
-            }
-            else
-            {
-                Debug("[PC=%04X] HuC6270 invalid data register (MSB) read: %02X", m_huc6280->GetState()->PC->GetValue(), m_address_register);
-            }
+                QueueMemoryRead();
 
             return ret;
         }
@@ -207,9 +228,10 @@ void HuC6270::WriteRegister(u16 address, u8 value)
         // Data register (MSB)
         case 3:
         {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6270_REGISTER, m_address_register, false);
-#endif
+            GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+                HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6270_REGISTER,
+                m_address_register,
+                false);
 
             bool msb = address & 0x01;
 
@@ -218,6 +240,9 @@ void HuC6270::WriteRegister(u16 address, u8 value)
                 Debug("[PC=%04X] HuC6270 INVALID write to data register (%s) %02X: %04X", m_huc6280->GetState()->PC->GetValue(), msb ? "MSB" : "LSB", value, m_address_register);
                 return;
             }
+
+            if ((m_address_register == HUC6270_REG_MAWR) || (m_address_register == HUC6270_REG_MARR) || (m_address_register == HUC6270_REG_VWR))
+                WaitForVramAccess();
 
             if (msb)
                 m_register[m_address_register] = (m_register[m_address_register] & 0x00FF) | (value << 8);
@@ -231,39 +256,55 @@ void HuC6270::WriteRegister(u16 address, u8 value)
                 // 0x01
                 case HUC6270_REG_MARR:
                     if (msb)
-                    {
-                        m_read_buffer = ReadVRAM(m_register[HUC6270_REG_MARR]);
-                        m_register[HUC6270_REG_MARR] += k_huc6270_read_write_increment[(m_register[HUC6270_REG_CR] >> 11) & 0x03];
-                    }
+                        QueueMemoryRead();
                     break;
                 // 0x02
                 case HUC6270_REG_VWR:
                     if (msb)
-                    {
-                        if (m_register[HUC6270_REG_MAWR] >= 0x8000)
-                        {
-                            Debug("[PC=%04X] HuC6270 ignoring write VWR out of bounds (%s) %04X: %02X", m_huc6280->GetState()->PC->GetValue(), msb ? "MSB" : "LSB", m_register[HUC6270_REG_MAWR], value);
-                        }
-                        else
-                        {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-                            m_huc6280->CheckMemoryBreakpoints(HuC6280::HuC6280_BREAKPOINT_TYPE_VRAM, m_register[HUC6270_REG_MAWR], false);
-#endif
-                            m_vram[m_register[HUC6270_REG_MAWR] & 0x7FFF] = m_register[HUC6270_REG_VWR];
-                        }
-
-                        m_register[HUC6270_REG_MAWR] += k_huc6270_read_write_increment[(m_register[HUC6270_REG_CR] >> 11) & 0x03];
-                    }
+                        QueueMemoryWrite();
                     break;
                 // 0x07
                 case HUC6270_REG_BXR:
+                    if (m_latch_clock_x < 0)
+                        m_bxr_written_before_latch = true;
+                    if (CheckUpdateLatchTiming(m_latch_clock_x))
+                        m_latched_bxr = m_register[HUC6270_REG_BXR];
                     //HUC6270_DEBUG("*** BXR Set");
                     break;
                 // 0x08
                 case HUC6270_REG_BYR:
-                    m_bg_counter_y = m_register[HUC6270_REG_BYR];
+                {
+                    m_bg_scroll_y_update_pending = true;
+                    if (CheckUpdateLatchTiming(m_latch_clock_y))
+                    {
+                        LatchScrollY();
+                        m_byr_lsb_write_clock = -1;
+                    }
+                    else if (!msb && (m_latch_clock_y >= 0))
+                    {
+                        s32 elapsed = CurrentHClock() - m_latch_clock_y;
+                        if (elapsed < 0)
+                            elapsed += HUC6260_LINE_LENGTH;
+
+                        m_byr_lsb_write_clock = (elapsed <= (m_huc6260->GetClockDivider() << 2)) ? CurrentHClock() : -1;
+                    }
+                    else if (msb && (m_byr_lsb_write_clock >= 0))
+                    {
+                        if (!m_bxr_written_before_latch && (m_h_state == HuC6270_HORIZONTAL_STATE_HSW))
+                        {
+                            s32 elapsed = CurrentHClock() - m_byr_lsb_write_clock;
+                            if (elapsed < 0)
+                                elapsed += HUC6260_LINE_LENGTH;
+
+                            if (elapsed <= (m_huc6260->GetClockDivider() * 6))
+                                RefreshScrollYCurrentLine();
+                        }
+
+                        m_byr_lsb_write_clock = -1;
+                    }
                     //HUC6270_DEBUG("*** BYR Set");
                     break;
+                }
                 // 0x12
                 case HUC6270_REG_LENR:
                     if (msb)
@@ -271,7 +312,6 @@ void HuC6270::WriteRegister(u16 address, u8 value)
                         m_vram_transfer_pending = 4 * (m_register[HUC6270_REG_LENR] + 1);
                         m_vram_transfer_src = m_register[HUC6270_REG_SOUR];
                         m_vram_transfer_dest = m_register[HUC6270_REG_DESR];
-                        //m_status_register |= HUC6270_STATUS_BUSY;
                     }
                     break;
                 // 0x13
@@ -287,10 +327,15 @@ void HuC6270::WriteRegister(u16 address, u8 value)
             break;
     }
 }
+
 void HuC6270::EndOfLine()
 {
     m_hpos = 0;
     m_vpos++;
+    m_latch_clock_y = -1;
+    m_latch_clock_x = -1;
+    m_bxr_written_before_latch = false;
+    m_byr_lsb_write_clock = -1;
 
     if(m_need_to_increment_raster_line)
         IncrementRasterLine();
@@ -298,7 +343,8 @@ void HuC6270::EndOfLine()
     if (m_vpos == m_huc6260->GetTotalLines())
     {
         m_vpos = 0;
-        m_burst_mode = ((m_latched_cr & 0x00C0) == 0);
+        m_latched_cr = (m_latched_cr & ~0x00C0) | (HUC6270_VAR_CR & 0x00C0);
+        m_burst_mode = ((HUC6270_VAR_CR & 0x00C0) == 0);
     }
 
     m_active_line = (m_v_state == HuC6270_VERTICAL_STATE_VDW) && (m_vpos >= 14) && (m_vpos < 256);
@@ -313,27 +359,23 @@ void HuC6270::LineEvents()
         switch (m_next_event)
         {
             case HuC6270_EVENT_BYR:
+            {
                 HUC6270_DEBUG("  [+] Event BYR\t");
                 m_next_event = HuC6270_EVENT_BXR;
                 m_clocks_to_next_event = 2;
 
-                if (m_increment_bg_counter_y)
-                {
-                    m_increment_bg_counter_y = false;
-                    if(m_raster_line == 0)
-                        m_bg_counter_y = m_register[HUC6270_REG_BYR];
-                    else
-                        m_bg_counter_y++;
-                }
-                m_bg_offset_y = m_bg_counter_y;
+                m_latch_clock_y = CurrentHClock();
+                LatchScrollY();
 
                 break;
+            }
             case HuC6270_EVENT_BXR:
                 HUC6270_DEBUG("  [+] Event BXR\t");
                 m_next_event = HuC6270_EVENT_HDS;
                 m_clocks_to_next_event = 6;
 
                 m_latched_bxr = m_register[HUC6270_REG_BXR];
+                m_latch_clock_x = CurrentHClock();
 
                 break;
             case HuC6270_EVENT_HDS:
@@ -377,22 +419,38 @@ void HuC6270::HSyncStart()
 {
     HUC6270_DEBUG("--- HorizSyncStart");
 
+    m_hsync_start_clock = CurrentHClock();
+    m_load_bg_start_clock = HUC6260_LINE_LENGTH;
+    m_load_bg_end_clock = 0;
+    m_allow_vram_access = false;
+
     m_latched_hds = HUC6270_VAR_HDS;
     m_latched_hdw = HUC6270_VAR_HDW;
     m_latched_hde = HUC6270_VAR_HDE;
     m_latched_hsw = HUC6270_VAR_HSW;
-    m_latched_cr = HUC6270_VAR_CR;
 
     m_next_event = HuC6270_EVENT_NONE;
     m_clocks_to_next_event = -1;
 
     s32 display_start = m_hpos + m_clocks_to_next_h_state + ((m_latched_hds + 1) << 3);
 
+    if (DotsToClocks(display_start - 24) >= HUC6260_LINE_LENGTH)
+        return;
+
+    if (m_v_state == HuC6270_VERTICAL_STATE_VDW)
+    {
+        s32 display_width = (m_latched_hdw + 1) << 3;
+        m_load_bg_start_clock = DotsToClocks(display_start - 16);
+        m_load_bg_end_clock = m_load_bg_start_clock + DotsToClocks(display_width + 16);
+        if (m_load_bg_end_clock > HUC6260_LINE_LENGTH)
+            m_load_bg_end_clock = HUC6260_LINE_LENGTH;
+    }
+
     s32 event_clocks;
     if (m_v_state == HuC6270_VERTICAL_STATE_VDW)
     {
         m_next_event = HuC6270_EVENT_BYR;
-        event_clocks = 37;
+        event_clocks = k_huc6270_byr_latch_clocks;
     }
     else
     {
@@ -434,12 +492,21 @@ void HuC6270::SATTransfer()
 
         if (m_sat_transfer_pending == 0)
         {
-            m_status_register &= ~HUC6270_STATUS_BUSY;
-
             if (m_register[HUC6270_REG_DCR] & 0x01)
             {
                 m_status_register |= HUC6270_STATUS_SAT_END;
                 m_huc6202->AssertIRQ1(this, true);
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+                if (m_trace_logger->IsEnabled(TRACE_VDC))
+                {
+                    GG_Trace_Entry e = {};
+                    e.type = TRACE_VDC;
+                    e.vdc.event = TRACE_VDC_SATB_DMA_END_IRQ;
+                    e.vdc.chip = m_chip_id;
+                    m_trace_logger->TraceLog(e);
+                }
+#endif
             }
         }
     }
@@ -464,15 +531,27 @@ void HuC6270::VRAMTransfer()
         s8 dest_increment = IS_SET_BIT(m_register[HUC6270_REG_DCR], 3) ? -1 : 1;
         m_vram_transfer_src += src_increment;
         m_vram_transfer_dest += dest_increment;
+        m_register[HUC6270_REG_SOUR] = m_vram_transfer_src;
+        m_register[HUC6270_REG_DESR] = m_vram_transfer_dest;
+        m_register[HUC6270_REG_LENR] = static_cast<u16>((m_vram_transfer_pending >> 2) - 1);
 
         if (m_vram_transfer_pending == 0)
         {
-            m_status_register &= ~HUC6270_STATUS_BUSY;
-
             if (m_register[HUC6270_REG_DCR] & 0x02)
             {
                 m_status_register |= HUC6270_STATUS_VRAM_END;
                 m_huc6202->AssertIRQ1(this, true);
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+                if (m_trace_logger->IsEnabled(TRACE_VDC))
+                {
+                    GG_Trace_Entry e = {};
+                    e.type = TRACE_VDC;
+                    e.vdc.event = TRACE_VDC_VRAM_DMA_END_IRQ;
+                    e.vdc.chip = m_chip_id;
+                    m_trace_logger->TraceLog(e);
+                }
+#endif
             }
         }
     }
@@ -524,6 +603,8 @@ void HuC6270::NextHorizontalState()
             HUC6270_DEBUG("  HDS start\t");
             m_clocks_to_next_h_state = (m_latched_hds + 1) << 3;
             m_line_buffer_index = 0;
+            if (!m_burst_mode)
+                m_latched_cr = HUC6270_VAR_CR;
             break;
         case HuC6270_HORIZONTAL_STATE_HDW:
             HUC6270_DEBUG("  HDW start\t");
@@ -531,6 +612,11 @@ void HuC6270::NextHorizontalState()
             m_next_event = HuC6270_EVENT_RCR;
             m_clocks_to_next_event = ((m_latched_hdw - 1) << 3) + 2;
             m_need_to_increment_raster_line = true;
+            if (m_clocks_to_next_event <= 0)
+            {
+                m_clocks_to_next_event = 1;
+                LineEvents();
+            }
             if (m_active_line)
                 RenderLine();
             break;
@@ -540,7 +626,8 @@ void HuC6270::NextHorizontalState()
             break;
         case HuC6270_HORIZONTAL_STATE_HSW:
             HUC6270_DEBUG("  HSW start\t");
-            m_clocks_to_next_h_state = HUC6260_LINE_LENGTH;
+            m_clocks_to_next_h_state = (m_latched_hsw + 1) << 3;
+            HSyncStart();
             break;
     }
 }
@@ -554,13 +641,35 @@ void HuC6270::VBlankIRQ()
         m_huc6202->AssertIRQ1(this, true);
         if(IsValidPointer(m_input_pump_fn))
             m_input_pump_fn();
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+        if (m_trace_logger->IsEnabled(TRACE_VDC))
+        {
+            GG_Trace_Entry e = {};
+            e.type = TRACE_VDC;
+            e.vdc.event = TRACE_VDC_VBLANK_IRQ;
+            e.vdc.chip = m_chip_id;
+            m_trace_logger->TraceLog(e);
+        }
+#endif
     }
 
     if (m_trigger_sat_transfer || (m_register[HUC6270_REG_DCR] & 0x10))
     {
         m_trigger_sat_transfer = false;
         m_sat_transfer_pending = 1024;
-        //m_status_register |= HUC6270_STATUS_BUSY;
+
+#if !defined(GG_DISABLE_DISASSEMBLER)
+        if (m_trace_logger->IsEnabled(TRACE_VDC))
+        {
+            GG_Trace_Entry e = {};
+            e.type = TRACE_VDC;
+            e.vdc.event = TRACE_VDC_SATB_DMA_START;
+            e.vdc.value = m_register[HUC6270_REG_DVSSR];
+            e.vdc.chip = m_chip_id;
+            m_trace_logger->TraceLog(e);
+        }
+#endif
     }
 }
 
@@ -663,15 +772,13 @@ void HuC6270::RenderSprites(int width)
             {
                 int x_in_screen = pos + x;
 
-                if (!priority && (m_line_buffer[x_in_screen] & 0x0F))
-                    pixel = 0;
-                else
-                    pixel |= m_sprites[i].palette;
-
-                pixel |= 0x100;
-
                 if ((m_sprites[i].index == 0) && (m_line_buffer_sprites[x_in_screen] & 0x0F))
                     SpriteCollisionIRQ();
+
+                if (!priority && (m_line_buffer[x_in_screen] & 0x0F))
+                    pixel |= 0x100;
+                else
+                    pixel |= m_sprites[i].palette | 0x100 | 0x200;
 
                 m_line_buffer_sprites[x_in_screen] = pixel;
             }
@@ -680,8 +787,8 @@ void HuC6270::RenderSprites(int width)
 
     for (int i = 0; i < width; i++)
     {
-        if(m_line_buffer_sprites[i] & 0x0F)
-            m_line_buffer[i] = m_line_buffer_sprites[i];
+        if(m_line_buffer_sprites[i] & 0x200)
+            m_line_buffer[i] = m_line_buffer_sprites[i] & ~0x200;
     }
 }
 
@@ -786,6 +893,7 @@ void HuC6270::FetchSprites()
 void HuC6270::SaveState(std::ostream& stream)
 {
     using namespace std;
+    UpdateCpuVramBusyStatus();
     stream.write(reinterpret_cast<const char*> (m_vram), sizeof(u16) * HUC6270_VRAM_SIZE);
     stream.write(reinterpret_cast<const char*> (&m_address_register), sizeof(m_address_register));
     stream.write(reinterpret_cast<const char*> (&m_status_register), sizeof(m_status_register));
@@ -793,6 +901,9 @@ void HuC6270::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (m_sat), sizeof(u16) * HUC6270_SAT_SIZE);
     stream.write(reinterpret_cast<const char*> (&m_read_buffer), sizeof(m_read_buffer));
     stream.write(reinterpret_cast<const char*> (&m_vram_openbus), sizeof(m_vram_openbus));
+    stream.write(reinterpret_cast<const char*> (&m_pending_memory_read), sizeof(m_pending_memory_read));
+    stream.write(reinterpret_cast<const char*> (&m_pending_memory_write), sizeof(m_pending_memory_write));
+    stream.write(reinterpret_cast<const char*> (&m_transfer_delay), sizeof(m_transfer_delay));
     stream.write(reinterpret_cast<const char*> (&m_trigger_sat_transfer), sizeof(m_trigger_sat_transfer));
     stream.write(reinterpret_cast<const char*> (&m_sat_transfer_pending), sizeof(m_sat_transfer_pending));
     stream.write(reinterpret_cast<const char*> (&m_vram_transfer_pending), sizeof(m_vram_transfer_pending));
@@ -838,9 +949,19 @@ void HuC6270::SaveState(std::ostream& stream)
         stream.write(reinterpret_cast<const char*> (&m_sprites[i].palette), sizeof(m_sprites[i].palette));
         stream.write(reinterpret_cast<const char*> (m_sprites[i].data), sizeof(m_sprites[i].data));
     }
+
+    stream.write(reinterpret_cast<const char*> (&m_load_bg_start_clock), sizeof(m_load_bg_start_clock));
+    stream.write(reinterpret_cast<const char*> (&m_load_bg_end_clock), sizeof(m_load_bg_end_clock));
+    stream.write(reinterpret_cast<const char*> (&m_hsync_start_clock), sizeof(m_hsync_start_clock));
+    stream.write(reinterpret_cast<const char*> (&m_allow_vram_access), sizeof(m_allow_vram_access));
+    stream.write(reinterpret_cast<const char*> (&m_bg_scroll_y_update_pending), sizeof(m_bg_scroll_y_update_pending));
+    stream.write(reinterpret_cast<const char*> (&m_latch_clock_y), sizeof(m_latch_clock_y));
+    stream.write(reinterpret_cast<const char*> (&m_latch_clock_x), sizeof(m_latch_clock_x));
+    stream.write(reinterpret_cast<const char*> (&m_bxr_written_before_latch), sizeof(m_bxr_written_before_latch));
+    stream.write(reinterpret_cast<const char*> (&m_byr_lsb_write_clock), sizeof(m_byr_lsb_write_clock));
 }
 
-void HuC6270::LoadState(std::istream& stream)
+void HuC6270::LoadState(std::istream& stream, int version)
 {
     using namespace std;
     stream.read(reinterpret_cast<char*> (m_vram), sizeof(u16) * HUC6270_VRAM_SIZE);
@@ -850,6 +971,19 @@ void HuC6270::LoadState(std::istream& stream)
     stream.read(reinterpret_cast<char*> (m_sat), sizeof(u16) * HUC6270_SAT_SIZE);
     stream.read(reinterpret_cast<char*> (&m_read_buffer), sizeof(m_read_buffer));
     stream.read(reinterpret_cast<char*> (&m_vram_openbus), sizeof(m_vram_openbus));
+    if (version >= 29)
+    {
+        stream.read(reinterpret_cast<char*> (&m_pending_memory_read), sizeof(m_pending_memory_read));
+        stream.read(reinterpret_cast<char*> (&m_pending_memory_write), sizeof(m_pending_memory_write));
+        stream.read(reinterpret_cast<char*> (&m_transfer_delay), sizeof(m_transfer_delay));
+    }
+    else
+    {
+        m_pending_memory_read = false;
+        m_pending_memory_write = false;
+        m_transfer_delay = 0;
+    }
+    UpdateCpuVramBusyStatus();
     stream.read(reinterpret_cast<char*> (&m_trigger_sat_transfer), sizeof(m_trigger_sat_transfer));
     stream.read(reinterpret_cast<char*> (&m_sat_transfer_pending), sizeof(m_sat_transfer_pending));
     stream.read(reinterpret_cast<char*> (&m_vram_transfer_pending), sizeof(m_vram_transfer_pending));
@@ -883,6 +1017,7 @@ void HuC6270::LoadState(std::istream& stream)
     stream.read(reinterpret_cast<char*> (&m_line_buffer_index), sizeof(m_line_buffer_index));
     stream.read(reinterpret_cast<char*> (&m_no_sprite_limit), sizeof(m_no_sprite_limit));
     stream.read(reinterpret_cast<char*> (&m_sprite_count), sizeof(m_sprite_count));
+    m_sprite_count = CLAMP(m_sprite_count, 0, HUC6270_SPRITES * 2);
     stream.read(reinterpret_cast<char*> (&m_sprite_overflow), sizeof(m_sprite_overflow));
     stream.read(reinterpret_cast<char*> (&m_next_event), sizeof(m_next_event));
     stream.read(reinterpret_cast<char*> (&m_clocks_to_next_event), sizeof(m_clocks_to_next_event));
@@ -894,5 +1029,45 @@ void HuC6270::LoadState(std::istream& stream)
         stream.read(reinterpret_cast<char*> (&m_sprites[i].flags), sizeof(m_sprites[i].flags));
         stream.read(reinterpret_cast<char*> (&m_sprites[i].palette), sizeof(m_sprites[i].palette));
         stream.read(reinterpret_cast<char*> (m_sprites[i].data), sizeof(m_sprites[i].data));
+    }
+
+    if (version >= 29)
+    {
+        stream.read(reinterpret_cast<char*> (&m_load_bg_start_clock), sizeof(m_load_bg_start_clock));
+        stream.read(reinterpret_cast<char*> (&m_load_bg_end_clock), sizeof(m_load_bg_end_clock));
+        stream.read(reinterpret_cast<char*> (&m_hsync_start_clock), sizeof(m_hsync_start_clock));
+        stream.read(reinterpret_cast<char*> (&m_allow_vram_access), sizeof(m_allow_vram_access));
+    }
+    else
+    {
+        m_load_bg_start_clock = HUC6260_LINE_LENGTH;
+        m_load_bg_end_clock = 0;
+        m_hsync_start_clock = CurrentHClock();
+        m_allow_vram_access = false;
+    }
+
+    if (version >= 30)
+    {
+        stream.read(reinterpret_cast<char*> (&m_bg_scroll_y_update_pending), sizeof(m_bg_scroll_y_update_pending));
+        stream.read(reinterpret_cast<char*> (&m_latch_clock_y), sizeof(m_latch_clock_y));
+        stream.read(reinterpret_cast<char*> (&m_latch_clock_x), sizeof(m_latch_clock_x));
+        if (version >= 31)
+        {
+            stream.read(reinterpret_cast<char*> (&m_bxr_written_before_latch), sizeof(m_bxr_written_before_latch));
+            stream.read(reinterpret_cast<char*> (&m_byr_lsb_write_clock), sizeof(m_byr_lsb_write_clock));
+        }
+        else
+        {
+            m_bxr_written_before_latch = false;
+            m_byr_lsb_write_clock = -1;
+        }
+    }
+    else
+    {
+        m_bg_scroll_y_update_pending = false;
+        m_latch_clock_y = -1;
+        m_latch_clock_x = -1;
+        m_bxr_written_before_latch = false;
+        m_byr_lsb_write_clock = -1;
     }
 }

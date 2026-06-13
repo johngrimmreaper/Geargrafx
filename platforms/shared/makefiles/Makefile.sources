@@ -27,6 +27,7 @@ SOURCES_CXX := \
     $(DEPS_DIR)/imgui/implot_demo.cpp \
     $(DESKTOP_SRC_DIR)/main.cpp \
     $(DESKTOP_SRC_DIR)/application.cpp \
+    $(DESKTOP_SRC_DIR)/application_headless.cpp \
     $(DESKTOP_SRC_DIR)/config.cpp \
     $(DESKTOP_SRC_DIR)/gui.cpp \
     $(DESKTOP_SRC_DIR)/gui_filedialogs.cpp \
@@ -50,10 +51,15 @@ SOURCES_CXX := \
     $(DESKTOP_SRC_DIR)/gui_debug_memory.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_psg.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_trace_logger.cpp \
+    $(DESKTOP_SRC_DIR)/gui_debug_rewind.cpp \
     $(DESKTOP_SRC_DIR)/ogl_renderer.cpp \
+    $(DESKTOP_SRC_DIR)/ogl_shader_program.cpp \
+    $(DESKTOP_SRC_DIR)/ogl_shader_chain.cpp \
+    $(DESKTOP_SRC_DIR)/shader_preset.cpp \
     $(DESKTOP_SRC_DIR)/display.cpp \
     $(DESKTOP_SRC_DIR)/events.cpp \
     $(DESKTOP_SRC_DIR)/gamepad.cpp \
+    $(DESKTOP_SRC_DIR)/rewind.cpp \
     $(DESKTOP_SRC_DIR)/emu.cpp \
     $(DESKTOP_SRC_DIR)/sound_queue.cpp \
     $(DESKTOP_SRC_DIR)/single_instance.cpp \
@@ -66,6 +72,8 @@ SOURCES_CXX := \
     $(SRC_DIR)/cdrom_audio.cpp \
     $(SRC_DIR)/cdrom_chd_image.cpp \
     $(SRC_DIR)/cdrom_cuebin_image.cpp \
+    $(SRC_DIR)/cdrom_file.cpp \
+    $(SRC_DIR)/cdrom_file_native.cpp \
     $(SRC_DIR)/cdrom_image.cpp \
     $(SRC_DIR)/cdrom_media.cpp \
     $(SRC_DIR)/cdrom.cpp \
@@ -83,4 +91,5 @@ SOURCES_CXX := \
     $(SRC_DIR)/memory.cpp \
     $(SRC_DIR)/scsi_controller.cpp \
     $(SRC_DIR)/sf2_mapper.cpp \
+    $(SRC_DIR)/trace_logger.cpp \
     $(SRC_DIR)/vgm_recorder.cpp

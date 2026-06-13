@@ -342,6 +342,10 @@ GG_Disassembler_Record* Memory::GetOrCreateDisassemblerRecord(u16 address)
         record->jump_bank = 0;
         record->subroutine = false;
         record->irq = 0;
+        record->has_operand_address = false;
+        record->operand_address = 0;
+        record->operand_is_zp = false;
+        record->auto_symbol[0] = 0;
         m_disassembler[physical_address] = record;
     }
 
@@ -433,4 +437,5 @@ void Memory::LoadState(std::istream& stream)
     stream.read(reinterpret_cast<char*> (&m_mpr_buffer), sizeof(m_mpr_buffer));
     if (IsValidPointer(m_current_mapper))
         m_current_mapper->LoadState(stream);
+    ReloadMemoryMap();
 }

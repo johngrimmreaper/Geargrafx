@@ -18,6 +18,7 @@
  */
 
 #include <SDL3/SDL.h>
+#include <vector>
 
 #define GUI_POPUPS_IMPORT
 #include "gui_popups.h"
@@ -33,12 +34,176 @@
 #include "keyboard.h"
 #include "imgui.h"
 #include "implot.h"
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+#include "cdrom_drive.h"
+#endif
 
 static char build_info[4096] = "";
 static int info_pos = 0;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+static const char* physical_cdrom_popup_title = "Select Physical CD-ROM...";
+static std::vector<CdRomDriveInfo> physical_cdrom_drives;
+static int physical_cdrom_selected = -1;
+static bool physical_cdrom_refresh = false;
+#endif
 
 static void add_build_info(const char* fmt, ...);
 static void check_hotkey_duplicates_popup(config_Hotkey* current_hotkey);
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+static bool open_selected_physical_cdrom_drive(void);
+#endif
+static void refresh_physical_cdrom_drives(void);
+
+void gui_popup_open_physical_cdrom(void)
+{
+    #if defined(GG_ENABLE_PHYSICAL_CDROM)
+    Debug("Opening physical CD-ROM popup");
+    physical_cdrom_refresh = true;
+    physical_cdrom_selected = -1;
+    gui_dialog_in_use = true;
+    ImGui::OpenPopup(physical_cdrom_popup_title);
+    #endif
+}
+
+void gui_popup_modal_physical_cdrom(void)
+{
+    #if defined(GG_ENABLE_PHYSICAL_CDROM)
+    if (physical_cdrom_refresh)
+    {
+        refresh_physical_cdrom_drives();
+        physical_cdrom_refresh = false;
+    }
+
+    if (ImGui::BeginPopupModal(physical_cdrom_popup_title, NULL, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        gui_dialog_in_use = true;
+
+        ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings;
+        if (ImGui::BeginTable("##physical_cdrom_drives", 2, table_flags, ImVec2(350.0f, 100.0f)))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Drive", ImGuiTableColumnFlags_WidthFixed, 270.0f);
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableHeadersRow();
+
+            if (physical_cdrom_drives.empty())
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("No physical CD-ROM found");
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("-");
+            }
+            else
+            {
+                for (int i = 0; i < (int)physical_cdrom_drives.size(); i++)
+                {
+                    CdRomDriveInfo& drive = physical_cdrom_drives[i];
+                    bool selected = physical_cdrom_selected == i;
+                    char label[640];
+                    snprintf(label, sizeof(label), "##physical_cdrom_%d", i);
+
+                    ImGui::TableNextRow();
+                    if (selected)
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ImGui::GetColorU32(red));
+
+                    ImGui::TableNextColumn();
+                    if (ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
+                    {
+                        bool double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+
+                        if (double_clicked)
+                        {
+                            physical_cdrom_selected = i;
+                            open_selected_physical_cdrom_drive();
+                        }
+                        else if (selected)
+                            physical_cdrom_selected = -1;
+                        else
+                            physical_cdrom_selected = i;
+                    }
+
+                    ImGui::SameLine(0, 0);
+                    ImGui::TextUnformatted(drive.name);
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(drive.has_disc ? "Ready" : "No Disc");
+                }
+            }
+
+            ImGui::EndTable();
+        }
+
+        bool can_open = (physical_cdrom_selected >= 0) && (physical_cdrom_selected < (int)physical_cdrom_drives.size()) && physical_cdrom_drives[physical_cdrom_selected].has_disc;
+
+        if (!can_open)
+            ImGui::BeginDisabled();
+
+        if (ImGui::Button("Open", ImVec2(110.0f, 0.0f)) && can_open)
+            open_selected_physical_cdrom_drive();
+
+        if (!can_open)
+            ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+        {
+            Debug("Physical CD-ROM popup canceled");
+            gui_dialog_in_use = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh", ImVec2(110.0f, 0.0f)))
+        {
+            Debug("Physical CD-ROM popup refresh button pressed");
+            refresh_physical_cdrom_drives();
+        }
+
+        ImGui::EndPopup();
+    }
+    #endif
+}
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+static bool open_selected_physical_cdrom_drive(void)
+{
+    if ((physical_cdrom_selected < 0) || (physical_cdrom_selected >= (int)physical_cdrom_drives.size()))
+        return false;
+
+    CdRomDriveInfo& drive = physical_cdrom_drives[physical_cdrom_selected];
+    if (!drive.has_disc)
+        return false;
+
+    Log("Opening physical CD-ROM drive %s", drive.id);
+    gui_load_physical_cdrom(drive.id);
+    gui_dialog_in_use = false;
+    ImGui::CloseCurrentPopup();
+    return true;
+}
+#endif
+
+static void refresh_physical_cdrom_drives(void)
+{
+    #if defined(GG_ENABLE_PHYSICAL_CDROM)
+    Debug("Enumerating physical CD-ROM drives");
+    bool listed = CdRomDrive::ListDrives(physical_cdrom_drives);
+    physical_cdrom_selected = -1;
+
+    if (!listed)
+    {
+        Error("Physical CD-ROM drive enumeration failed");
+        return;
+    }
+
+    Debug("Physical CD-ROM drives found: %d", (int)physical_cdrom_drives.size());
+
+    for (int i = 0; i < (int)physical_cdrom_drives.size(); i++)
+    {
+        Debug("Physical CD-ROM drive %d: id=%s name=%s has_disc=%s", i, physical_cdrom_drives[i].id, physical_cdrom_drives[i].name, physical_cdrom_drives[i].has_disc ? "true" : "false");
+    }
+    #endif
+}
 
 void gui_popup_modal_keyboard()
 {
@@ -47,20 +212,11 @@ void gui_popup_modal_keyboard()
         ImGui::Text("Press any key to assign...\n\n");
         ImGui::Separator();
 
-        for (ImGuiKey i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; i = (ImGuiKey)(i + 1))
+        SDL_Scancode scancode = keyboard_get_first_pressed_scancode();
+        if (scancode != SDL_SCANCODE_UNKNOWN)
         {
-            if (ImGui::IsKeyDown(i))
-            {
-                SDL_Keycode key_code = ImGuiKeyToSDLKeycode(i);
-                SDL_Scancode key = SDL_GetScancodeFromKey(key_code, NULL);
-
-                if ((key != SDL_SCANCODE_LCTRL) && (key != SDL_SCANCODE_RCTRL) && (key != SDL_SCANCODE_CAPSLOCK))
-                {
-                    *gui_configured_key = key;
-                    ImGui::CloseCurrentPopup();
-                    break;
-                }
-            }
+            *gui_configured_key = scancode;
+            ImGui::CloseCurrentPopup();
         }
 
         if (ImGui::Button("Cancel", ImVec2(120, 0)))
@@ -75,31 +231,40 @@ void gui_popup_modal_gamepad(int pad)
 {
     if (ImGui::BeginPopupModal("Gamepad Configuration", NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("Press any button in your gamepad...\n\n");
+        SDL_Gamepad* controller = gamepad_controller[pad];
+
+        if (IsValidPointer(controller))
+            ImGui::Text("Press any button in your gamepad...\n\n");
+        else
+            ImGui::Text("No gamepad detected.\n\n");
+
         ImGui::Separator();
 
-        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+        if (IsValidPointer(controller))
         {
-            if (SDL_GetGamepadButton(gamepad_controller[pad], (SDL_GamepadButton)i))
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
             {
-                *gui_configured_button = i;
-                ImGui::CloseCurrentPopup();
-                break;
+                if (SDL_GetGamepadButton(controller, (SDL_GamepadButton)i))
+                {
+                    *gui_configured_button = i;
+                    ImGui::CloseCurrentPopup();
+                    break;
+                }
             }
-        }
 
-        for (int a = SDL_GAMEPAD_AXIS_LEFTX; a < SDL_GAMEPAD_AXIS_COUNT; a++)
-        {
-            if (a != SDL_GAMEPAD_AXIS_LEFT_TRIGGER && a != SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
-                continue;
-
-            Sint16 value = SDL_GetGamepadAxis(gamepad_controller[pad], (SDL_GamepadAxis)a);
-
-            if (value > GAMEPAD_VBTN_AXIS_THRESHOLD)
+            for (int a = SDL_GAMEPAD_AXIS_LEFTX; a < SDL_GAMEPAD_AXIS_COUNT; a++)
             {
-                *gui_configured_button = GAMEPAD_VBTN_AXIS_BASE + a;
-                ImGui::CloseCurrentPopup();
-                break;
+                if (a != SDL_GAMEPAD_AXIS_LEFT_TRIGGER && a != SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
+                    continue;
+
+                Sint16 value = SDL_GetGamepadAxis(controller, (SDL_GamepadAxis)a);
+
+                if (value > GAMEPAD_VBTN_AXIS_THRESHOLD)
+                {
+                    *gui_configured_button = GAMEPAD_VBTN_AXIS_BASE + a;
+                    ImGui::CloseCurrentPopup();
+                    break;
+                }
             }
         }
 
@@ -119,33 +284,15 @@ void gui_popup_modal_hotkey()
         ImGui::Text("Hold Ctrl, Shift, or Alt before pressing the key\n\n");
         ImGui::Separator();
 
-        SDL_Keymod mods = SDL_GetModState();
-
-        for (ImGuiKey i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; i = (ImGuiKey)(i + 1))
+        SDL_Keymod mods = (SDL_Keymod)(SDL_GetModState() & (SDL_KMOD_CTRL | SDL_KMOD_SHIFT | SDL_KMOD_ALT | SDL_KMOD_GUI));
+        SDL_Scancode scancode = keyboard_get_first_pressed_scancode();
+        if (scancode != SDL_SCANCODE_UNKNOWN)
         {
-            // Skip modifier keys
-            if (i == ImGuiKey_LeftCtrl || i == ImGuiKey_RightCtrl ||
-                i == ImGuiKey_LeftShift || i == ImGuiKey_RightShift ||
-                i == ImGuiKey_LeftAlt || i == ImGuiKey_RightAlt ||
-                i == ImGuiKey_LeftSuper || i == ImGuiKey_RightSuper ||
-                i == ImGuiKey_CapsLock)
-                continue;
-
-            if (ImGui::IsKeyPressed(i, false))
-            {
-                SDL_Keycode key_code = ImGuiKeyToSDLKeycode(i);
-                SDL_Scancode key = SDL_GetScancodeFromKey(key_code, NULL);
-
-                if (key != SDL_SCANCODE_UNKNOWN)
-                {
-                    gui_configured_hotkey->key = key;
-                    gui_configured_hotkey->mod = mods;
-                    config_update_hotkey_string(gui_configured_hotkey);
-                    check_hotkey_duplicates_popup(gui_configured_hotkey);
-                    ImGui::CloseCurrentPopup();
-                    break;
-                }
-            }
+            gui_configured_hotkey->key = scancode;
+            gui_configured_hotkey->mod = mods;
+            config_update_hotkey_string(gui_configured_hotkey);
+            check_hotkey_duplicates_popup(gui_configured_hotkey);
+            ImGui::CloseCurrentPopup();
         }
 
         if (ImGui::Button("Cancel", ImVec2(120, 0)))
@@ -331,6 +478,7 @@ void gui_popup_modal_load_defaults(void)
         if (ImGui::Button("Yes", ImVec2(120, 0)))
         {
             config_load_defaults();
+            gui_set_style();
             ImGui::CloseCurrentPopup();
             gui_dialog_in_use = false;
         }

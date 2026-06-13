@@ -28,6 +28,7 @@
 class HuC6202;
 class HuC6260;
 class HuC6280;
+class TraceLogger;
 
 class HuC6270
 {
@@ -74,7 +75,7 @@ public:
 public:
     HuC6270(HuC6280* huC6280);
     ~HuC6270();
-    void Init(HuC6260* huC6260, HuC6202* huC6202, GG_Input_Pump_Fn input_pump_fn);
+    void Init(HuC6260* huC6260, HuC6202* huC6202, GG_Input_Pump_Fn input_pump_fn, int chip_id);
     void Reset();
     u16 Clock();
     void SetHSyncHigh();
@@ -86,8 +87,11 @@ public:
     u16* GetSAT();
     void SetNoSpriteLimit(bool no_sprite_limit);
     void SetSafeDefaults(bool safe_defaults);
+    void SetTraceLogger(TraceLogger* trace_logger);
+    void ProcessCpuVramAccesses(u32 cycles);
+    bool HasPendingCpuVramAccess();
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
     struct HuC6270_Sprite_Data
@@ -99,10 +103,10 @@ private:
         u16 data[4];
     };
 
-private:
     HuC6202* m_huc6202;
     HuC6260* m_huc6260;
     HuC6280* m_huc6280;
+    TraceLogger* m_trace_logger;
     HuC6270_State m_state;
     u16 m_vram[HUC6270_VRAM_SIZE] = {};
     u16 m_address_register;
@@ -111,6 +115,13 @@ private:
     u16 m_sat[HUC6270_SAT_SIZE] = {};
     u16 m_read_buffer;
     u16 m_vram_openbus;
+    bool m_pending_memory_read;
+    bool m_pending_memory_write;
+    s32 m_transfer_delay;
+    s32 m_load_bg_start_clock;
+    s32 m_load_bg_end_clock;
+    s32 m_hsync_start_clock;
+    bool m_allow_vram_access;
     bool m_trigger_sat_transfer;
     u16 m_sat_transfer_pending;
     u32 m_vram_transfer_pending;
@@ -120,8 +131,13 @@ private:
     s32 m_vpos;
     s32 m_bg_offset_y;
     s32 m_bg_counter_y;
+    bool m_bg_scroll_y_update_pending;
+    bool m_bxr_written_before_latch;
+    s32 m_byr_lsb_write_clock;
     bool m_increment_bg_counter_y;
     bool m_need_to_increment_raster_line;
+    s32 m_latch_clock_y;
+    s32 m_latch_clock_x;
     s32 m_raster_line;
     u16 m_latched_bxr;
     u16 m_latched_hds;
@@ -152,14 +168,32 @@ private:
     bool m_sprite_overflow;
     HuC6270_Sprite_Data m_sprites[HUC6270_SPRITES * 2] = {};
     GG_Input_Pump_Fn m_input_pump_fn;
+    int m_chip_id;
 
 private:
     void EndOfLine();
     void LineEvents();
     void HSyncStart();
+    void LatchScrollY();
+    void RefreshScrollYCurrentLine();
+    bool CheckUpdateLatchTiming(s32 clock);
     void IncrementRasterLine();
     void SATTransfer();
     void VRAMTransfer();
+    void QueueMemoryRead();
+    void QueueMemoryWrite();
+    void WaitForVramAccess();
+    void ProcessVramRead();
+    void ProcessVramWrite();
+    void UpdateCpuVramBusyStatus();
+    int GetCpuVramReadDelay();
+    int GetCpuVramWriteDelay();
+    s32 CurrentHClock();
+    s32 DotsToClocks(s32 dots);
+    s32 ClocksSinceHSyncStart(s32 elapsed_cycles);
+    bool IsInBgFetchWindow(s32 hclock);
+    bool IsCpuVramBgSlotAllowed(s32 hclock);
+    bool IsCpuVramSlotAvailable(s32 elapsed_cycles);
     void NextVerticalState();
     void NextHorizontalState();
     u16 ReadVRAM(u16 address);
@@ -196,6 +230,11 @@ static const int k_huc6270_screen_size_y_pixels_mask[8] = {
     k_huc6270_screen_size_y_pixels[6] - 1, k_huc6270_screen_size_y_pixels[7] - 1 };
 
 static const int k_huc6270_read_write_increment[4] = { 0x01, 0x20, 0x40, 0x80 };
+
+static const int k_huc6270_vram_read_delay[3] = { 24, 24, 15 };
+static const int k_huc6270_vram_write_delay[3] = { 21, 18, 12 };
+
+static const int k_huc6270_byr_latch_clocks = 36;
 
 static const int k_huc6270_sprite_width[2] = { 16, 32 };
 static const int k_huc6270_sprite_height[4] = { 16, 32, 64, 64 };

@@ -2,7 +2,48 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server for the Geargrafx emulator, enabling AI-assisted debugging and development of TurboGrafx-16 / PC Engine / SuperGrafx games.
 
-This server provides tools for game development, rom hacking, reverse engineering, and debugging through standardized MCP protocols compatible with AI agents like GitHub Copilot, Claude, ChatGPT and others.
+This server provides tools for game development, rom hacking, reverse engineering, and debugging through standardized MCP protocols compatible with AI agents like GitHub Copilot, Claude, Codex and others.
+
+## Downloads
+
+<table>
+  <thead>
+    <tr>
+      <th>Platform</th>
+      <th>Architecture</th>
+      <th>Download Link</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="2"><strong>Windows</strong></td>
+      <td>x64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-windows-x64.mcpb">Geargrafx-1.7.10-mcpb-windows-x64.mcpb</a></td>
+    </tr>
+    <tr>
+      <td>ARM64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-windows-arm64.mcpb">Geargrafx-1.7.10-mcpb-windows-arm64.mcpb</a></td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>macOS</strong></td>
+      <td>x64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-macos-x64.mcpb">Geargrafx-1.7.10-mcpb-macos-x64.mcpb</a></td>
+    </tr>
+    <tr>
+      <td>ARM64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-macos-arm64.mcpb">Geargrafx-1.7.10-mcpb-macos-arm64.mcpb</a></td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>Linux</strong></td>
+      <td>x64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-linux-x64.mcpb">Geargrafx-1.7.10-mcpb-linux-x64.mcpb</a></td>
+    </tr>
+    <tr>
+      <td>ARM64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.10/Geargrafx-1.7.10-mcpb-linux-arm64.mcpb">Geargrafx-1.7.10-mcpb-linux-arm64.mcpb</a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Features
 
@@ -14,7 +55,9 @@ This server provides tools for game development, rom hacking, reverse engineerin
 - **Symbol Support**: Add, remove, and list debug symbols
 - **Bookmarks**: Memory and disassembler bookmarks for navigation
 - **Call Stack**: View function call hierarchy
+- **Trace Logger**: CPU instruction trace with interleaved hardware events (VDC, VCE, PSG, timer, CD-ROM, SCSI, ADPCM, input)
 - **Screenshot Capture**: Get current frame as PNG image
+- **Rewind**: Time-travel debugging with snapshot status and seek tools
 - **Documentation Resources**: Built-in hardware and programming documentation for AI context
 - **GUI Integration**: MCP server runs alongside the emulator GUI, sharing the same state
 
@@ -29,6 +72,10 @@ The default mode uses standard input/output for communication. The emulator is l
 ### HTTP Transport
 
 The HTTP transport mode runs the emulator with an embedded web server on `localhost:7777/mcp`. The emulator stays running independently while the AI client connects via HTTP.
+
+### Headless Mode
+
+Add `--headless` to run without a GUI window. This is useful for servers, CLI agents, or any machine without a display. All MCP tools work identically in headless mode. Requires `--mcp-stdio` or `--mcp-http`.
 
 ## Quick Start
 
@@ -246,6 +293,8 @@ The server exposes tools organized in the following categories:
 - `remove_disassembler_bookmark` - Remove disassembler bookmark
 - `list_disassembler_bookmarks` - List all disassembler bookmarks
 - `get_call_stack` - View function call hierarchy
+- `get_trace_log` - Read trace logger entries (CPU + hardware events). Use set_trace_log to start/stop the logger
+- `set_trace_log` - Start or stop the trace logger. Records CPU instructions and hardware events into a ring buffer. Filter event types with optional booleans
 
 ### Breakpoints
 - `set_breakpoint` - Set execution, read, or write breakpoint (supports 5 memory areas: rom_ram, vram, palette, huc6270_reg, huc6260_reg)
@@ -274,7 +323,9 @@ The server exposes tools organized in the following categories:
 
 ### Media & State Management
 - `get_media_info` - Get loaded ROM/CD info
+- `list_recent_media` - List the 10 most recent ROM files or CD-ROM images opened by Geargrafx
 - `load_media` - Load ROM file or CD-ROM image (.pce, .sgx, .hes, .cue, .zip). Automatically loads .sym symbol file if present
+- `load_bios` - Load a BIOS file for CD-ROM emulation. Two types: 'syscard' (System Card, 256KB) and 'gameexpress' (Game Express, 32KB)
 - `load_symbols` - Load debug symbols from file (.sym format with 'BANK:ADDRESS LABEL' entries)
 - `list_save_state_slots` - List all 5 save state slots with information (rom name, timestamp, validity)
 - `select_save_state_slot` - Select active save state slot (1-5) for save/load operations
@@ -282,6 +333,8 @@ The server exposes tools organized in the following categories:
 - `load_state` - Load emulator state from currently selected slot
 - `set_fast_forward_speed` - Set fast forward speed multiplier (0: 1.5x, 1: 2x, 2: 2.5x, 3: 3x, 4: Unlimited)
 - `toggle_fast_forward` - Toggle fast forward mode on/off
+- `get_rewind_status` - Get rewind buffer status (enabled, snapshots, capacity, buffered seconds)
+- `rewind_seek` - Seek to a specific rewind snapshot while paused
 
 ### Controller Input
 - `controller_button` - Control a button on a controller (player 1-5). Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, select, run, I, II, III, IV, V, VI

@@ -29,6 +29,12 @@ INLINE u8 ArcadeCardMapper::ReadPortData(u8 port)
     return m_card_memory[address];
 }
 
+INLINE u8 ArcadeCardMapper::PeekPortData(u8 port)
+{
+    u32 address = EffectiveAddress(port);
+    return m_card_memory[address];
+}
+
 INLINE void ArcadeCardMapper::WritePortData(u8 port, u8 value)
 {
     u32 address = EffectiveAddress(port);
@@ -49,8 +55,10 @@ INLINE void ArcadeCardMapper::Increment(u8 port)
 
 INLINE void ArcadeCardMapper::AddOffset(u8 port)
 {
-    s32 real_offset = m_ports[port].signed_offset
-        ? (s32)((s16)(m_ports[port].offset)) : (s32)(m_ports[port].offset);
+    u32 real_offset = m_ports[port].offset;
+
+    if (m_ports[port].signed_offset)
+        real_offset += 0xFF0000;
 
     m_ports[port].base = (m_ports[port].base + real_offset) & 0xFFFFFF;
 }
@@ -61,8 +69,10 @@ INLINE u32 ArcadeCardMapper::EffectiveAddress(u8 port)
 
     if (m_ports[port].add_offset)
     {
-        s32 real_offset = m_ports[port].signed_offset
-        ? (s32)((s16)(m_ports[port].offset)) : (s32)(m_ports[port].offset);
+        u32 real_offset = m_ports[port].offset;
+
+        if (m_ports[port].signed_offset)
+            real_offset += 0xFF0000;
 
         address += real_offset;
     }

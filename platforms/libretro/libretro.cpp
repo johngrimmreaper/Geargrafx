@@ -22,9 +22,11 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include "libretro.h"
 #include "geargrafx.h"
+#include "cdrom_file.h"
 #include "libretro_core_options.h"
 
 #ifdef _WIN32
@@ -36,6 +38,7 @@ static const char slash = '/';
 #define RETRO_DEVICE_PCE_PAD            RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)
 #define RETRO_DEVICE_PCE_AVENUE_PAD_3   RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
 #define RETRO_DEVICE_PCE_AVENUE_PAD_6   RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 2)
+#define RETRO_DEVICE_PCE_MOUSE          RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_MOUSE, 0)
 
 #define MAX_PADS GG_MAX_GAMEPADS
 #define MAX_BUTTONS 14
@@ -77,7 +80,8 @@ static bool lowpass_speed_536 = false;
 static bool lowpass_speed_716 = true;
 static bool lowpass_speed_108 = true;
 
-static bool input_updated = false;
+static bool turbo_toggle_hotkey = false;
+static int mouse_sensitivity = 5;
 static bool libretro_supports_bitmasks;
 static int joypad_current[MAX_PADS][MAX_BUTTONS];
 static int joypad_old[MAX_PADS][MAX_BUTTONS];
@@ -106,9 +110,15 @@ static void load_bios(void);
 static void save_mb128(void);
 static void load_mb128(void);
 static void set_controller_info(void);
-static void update_input(void);
+static int get_mouse_port(void);
+static void release_controller_input(unsigned port);
+static void poll_input(void);
+static void apply_input(void);
 static bool categories_supported = false;
 static void check_variables(void);
+static bool path_has_extension(const char* path, const char* extension);
+static bool path_is_cdrom_uri(const char* path);
+static bool path_is_cd_content(const char* path);
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -158,6 +168,15 @@ void retro_set_environment(retro_environment_t cb)
 {
     environ_cb = cb;
 
+    struct retro_vfs_interface_info vfs_interface_info = { };
+    vfs_interface_info.required_interface_version = 2;
+    vfs_interface_info.iface = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_interface_info) && vfs_interface_info.iface)
+        CdRomFile::SetVfsInterface(vfs_interface_info.iface);
+    else
+        CdRomFile::SetVfsInterface(NULL);
+
     static const struct retro_system_content_info_override content_overrides[] = {
         {
             "pce|sgx|hes",  // extensions
@@ -195,7 +214,7 @@ void retro_init(void)
     log_cb(RETRO_LOG_INFO, "%s (%s) libretro\n", GG_TITLE, GG_VERSION);
 
     core = new GeargrafxCore();
-    core->Init(update_input, GG_PIXEL_RGB565);
+    core->Init(apply_input, GG_PIXEL_RGB565);
     core->GetRuntimeInfo(runtime_info);
 
     frame_buffer = new u8[2048 * 512 * 2];
@@ -237,6 +256,9 @@ void retro_set_controller_port_device(unsigned port, unsigned device)
         return;
     }
 
+    if (input_device[port] != device)
+        release_controller_input(port);
+
     input_device[port] = device;
 
     switch ( device )
@@ -257,6 +279,10 @@ void retro_set_controller_port_device(unsigned port, unsigned device)
         case RETRO_DEVICE_PCE_AVENUE_PAD_6:
             log_cb(RETRO_LOG_INFO, "Controller %u: Avenue Pad 6\n", port);
             core->GetInput()->SetControllerType((GG_Controllers)port, GG_CONTROLLER_AVENUE_PAD_6);
+            break;
+        case RETRO_DEVICE_PCE_MOUSE:
+            log_cb(RETRO_LOG_INFO, "Controller %u: Mouse\n", port);
+            core->GetInput()->SetControllerType((GG_Controllers)port, GG_CONTROLLER_MOUSE);
             break;
         default:
             log_cb(RETRO_LOG_DEBUG, "Setting descriptors for unsupported device.\n");
@@ -291,12 +317,12 @@ void retro_run(void)
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &core_options_updated) && core_options_updated)
         check_variables();
 
+    poll_input();
+
     audio_sample_count = 0;
     core->RunToVBlank(frame_buffer, audio_buf, &audio_sample_count);
 
-    if (!input_updated)
-        update_input();
-    input_updated = false;
+    apply_input();
 
     core->GetRuntimeInfo(runtime_info);
 
@@ -328,13 +354,33 @@ void retro_run(void)
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+    if (!info)
+    {
+        log_cb(RETRO_LOG_ERROR, "retro_load_game received NULL info.\n");
+        return false;
+    }
+
     check_variables();
     load_bios();
 
-    snprintf(retro_game_path, sizeof(retro_game_path), "%s", info->path);
+    const char* load_path = info->path;
+    const struct retro_game_info_ext* info_ext = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_GAME_INFO_EXT, &info_ext) && info_ext && info_ext->full_path && info_ext->full_path[0])
+        load_path = info_ext->full_path;
+
+    if (!load_path)
+        load_path = "";
+
+    snprintf(retro_game_path, sizeof(retro_game_path), "%s", load_path);
     log_cb(RETRO_LOG_INFO, "retro_load_game: %s\n", retro_game_path);
 
-    if (IsValidPointer(info->data))
+    bool is_cd_content = path_is_cd_content(retro_game_path);
+
+    if (path_is_cdrom_uri(retro_game_path))
+        log_cb(RETRO_LOG_INFO, "Loading CD-ROM through libretro VFS: %s\n", retro_game_path);
+
+    if (IsValidPointer(info->data) && !is_cd_content)
     {
         log_cb(RETRO_LOG_INFO, "retro_load_game HuCard from buffer.\n");
         if (!core->LoadHuCardFromBuffer((const u8*)(info->data), info->size, retro_game_path))
@@ -476,7 +522,16 @@ static void load_bios(void)
     log_cb(RETRO_LOG_INFO, "Loading BIOS: %s\n", selected_bios);
 
     snprintf(bios_path, 4113, "%s%c%s", retro_system_directory, slash, selected_bios);
-    core->LoadBios(bios_path, true);
+    if (!core->LoadBios(bios_path, true))
+    {
+        struct retro_message msg = {};
+        char msg_buf[128];
+        snprintf(msg_buf, sizeof(msg_buf), "CD-ROM BIOS not found: %s", selected_bios);
+        msg.msg = msg_buf;
+        msg.frames = 360;
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+        log_cb(RETRO_LOG_ERROR, "%s\n", msg_buf);
+    }
 
     snprintf(bios_path, 4113, "%s%c%s", retro_system_directory, slash, gameexpress);
     core->LoadBios(bios_path, false);
@@ -507,15 +562,16 @@ static void set_controller_info(void)
     static const struct retro_controller_description port[] = {
         { "PC Engine Pad", RETRO_DEVICE_PCE_PAD },
         { "Avenue Pad 3", RETRO_DEVICE_PCE_AVENUE_PAD_3 },
-        { "Avenue Pad 6", RETRO_DEVICE_PCE_AVENUE_PAD_6 }
+        { "Avenue Pad 6", RETRO_DEVICE_PCE_AVENUE_PAD_6 },
+        { "Mouse", RETRO_DEVICE_PCE_MOUSE }
     };
 
     static const struct retro_controller_info ports[] = {
-        { port, 3 },
-        { port, 3 },
-        { port, 3 },
-        { port, 3 },
-        { port, 3 },
+        { port, 4 },
+        { port, 4 },
+        { port, 4 },
+        { port, 4 },
+        { port, 4 },
         { NULL, 0 }
     };
 
@@ -537,23 +593,56 @@ static void set_controller_info(void)
         { INDEX, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,      "VI" },\
         { INDEX, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,     "Toggle Turbo II" },\
         { INDEX, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,     "Toggle Turbo I" },
+        #define mouse_ids(INDEX) \
+        { INDEX, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT,     "Mouse Left (II)" },\
+        { INDEX, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT,    "Mouse Right (I)" },\
+        { INDEX, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE,   "Mouse Middle (Run)" },\
+        { INDEX, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_4, "Mouse Button 4 (Select)" },\
+        { INDEX, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_5, "Mouse Button 5 (Run)" },
         button_ids(0)
+        mouse_ids(0)
         button_ids(1)
+        mouse_ids(1)
         button_ids(2)
+        mouse_ids(2)
         button_ids(3)
+        mouse_ids(3)
         button_ids(4)
+        mouse_ids(4)
         { 0, 0, 0, 0, NULL }
     };
 
     environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, joypad);
 }
 
-static void update_input(void)
+static int get_mouse_port(void)
 {
-    if (input_updated)
-        return;
-    input_updated = true;
+    for (int i = 0; i < MAX_PADS; i++)
+    {
+        if (input_device[i] == RETRO_DEVICE_PCE_MOUSE)
+            return i;
+    }
 
+    return -1;
+}
+
+static void release_controller_input(unsigned port)
+{
+    for (int i = 0; i < 12; i++)
+        core->KeyReleased((GG_Controllers)port, keymap[i]);
+
+    for (int i = 0; i < MAX_BUTTONS; i++)
+    {
+        joypad_current[port][i] = 0;
+        joypad_old[port][i] = 0;
+    }
+
+    if (input_device[port] == RETRO_DEVICE_PCE_MOUSE)
+        core->GetInput()->SetMouseDelta(0, 0);
+}
+
+static void poll_input(void)
+{
     int16_t joypad_bits[MAX_PADS];
 
     input_poll_cb();
@@ -627,27 +716,82 @@ static void update_input(void)
         joypad_current[j][13] = IsButtonPressed(joypad_bits[j], RETRO_DEVICE_ID_JOYPAD_R2);
     }
 
+    // Handle turbo toggle hotkeys
     for (int j = 0; j < MAX_PADS; j++)
-        for (int i = 0; i < MAX_BUTTONS; i++)
+        for (int i = 12; i < MAX_BUTTONS; i++)
         {
-            if (i > 11)
+            if (turbo_toggle_hotkey && joypad_current[j][i] && !joypad_old[j][i])
             {
                 GG_Keys key = (i == 12) ? GG_KEY_II : GG_KEY_I;
-                if (joypad_current[j][i] && !joypad_old[j][i])
-                {
-                    bool turbo = core->GetInput()->IsTurboEnabled((GG_Controllers)j, key);
-                    core->GetInput()->EnableTurbo((GG_Controllers)j, key, !turbo);
-                    log_cb(RETRO_LOG_DEBUG, "Toggling Turbo %d for controller %d: %d\n", key, j, !turbo);
-                }
+                bool turbo = core->GetInput()->IsTurboEnabled((GG_Controllers)j, key);
 
-                continue;
+                char option_key[64];
+                snprintf(option_key, sizeof(option_key), "geargrafx_turbo_p%d_%s", j + 1, (key == GG_KEY_I) ? "i" : "ii");
+
+                struct retro_variable var = {};
+                var.key = option_key;
+                var.value = turbo ? "Disabled" : "Enabled";
+                environ_cb(RETRO_ENVIRONMENT_SET_VARIABLE, &var);
+
+                struct retro_message msg = {};
+                char msg_buf[64];
+                snprintf(msg_buf, sizeof(msg_buf), "P%d Turbo %s %s", j + 1,
+                    (key == GG_KEY_I) ? "I" : "II", turbo ? "OFF" : "ON");
+                msg.msg = msg_buf;
+                msg.frames = 180;
+                environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
             }
-
-            if (joypad_current[j][i])
-                core->KeyPressed((GG_Controllers)j, keymap[i]);
-            else
-                core->KeyReleased((GG_Controllers)j, keymap[i]);
         }
+}
+
+static void apply_input(void)
+{
+    int mouse_port = get_mouse_port();
+
+    for (int j = 0; j < MAX_PADS; j++)
+    {
+        if (j == mouse_port)
+        {
+            int mouse_x = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X);
+            int mouse_y = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
+
+            int sen = MAX(mouse_sensitivity, 1);
+            int relx = (int)((float)mouse_x * ((float)sen / 6.0f));
+            int rely = (int)((float)mouse_y * ((float)sen / 6.0f));
+
+            core->GetInput()->SetMouseDelta(relx, rely);
+
+            if (input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT))
+                core->KeyPressed((GG_Controllers)j, GG_KEY_I);
+            else
+                core->KeyReleased((GG_Controllers)j, GG_KEY_I);
+
+            if (input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT))
+                core->KeyPressed((GG_Controllers)j, GG_KEY_II);
+            else
+                core->KeyReleased((GG_Controllers)j, GG_KEY_II);
+
+            if (joypad_current[j][6] || input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_4))
+                core->KeyPressed((GG_Controllers)j, GG_KEY_SELECT);
+            else
+                core->KeyReleased((GG_Controllers)j, GG_KEY_SELECT);
+
+            if (joypad_current[j][7] || input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE) || input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_5))
+                core->KeyPressed((GG_Controllers)j, GG_KEY_RUN);
+            else
+                core->KeyReleased((GG_Controllers)j, GG_KEY_RUN);
+        }
+        else
+        {
+            for (int i = 0; i < 12; i++)
+            {
+                if (joypad_current[j][i])
+                    core->KeyPressed((GG_Controllers)j, keymap[i]);
+                else
+                    core->KeyReleased((GG_Controllers)j, keymap[i]);
+            }
+        }
+    }
 }
 
 static void check_variables(void)
@@ -682,6 +826,14 @@ static void check_variables(void)
             load_mb128();
         else if (!is_connected && was_connected)
             save_mb128();
+    }
+
+    var.key = "geargrafx_mouse_sensitivity";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        mouse_sensitivity = CLAMP(atoi(var.value), 1, 15);
     }
 
     var.key = "geargrafx_aspect_ratio";
@@ -823,8 +975,7 @@ static void check_variables(void)
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
     {
         bool enabled = (strcmp(var.value, "Enabled") == 0);
-        core->GetMemory()->EnableBackupRam(enabled);
-        core->GetInput()->EnableCDROM(enabled);
+        core->GetMedia()->ForceBackupRAM(enabled);
     }
 
     var.key = "geargrafx_deterministic_netplay";
@@ -1014,6 +1165,14 @@ static void check_variables(void)
         core->GetAudio()->SetADPCMVolume(volume_f);
     }
 
+    var.key = "geargrafx_turbo_toggle_hotkey";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        turbo_toggle_hotkey = (strcmp(var.value, "Enabled") == 0);
+    }
+
     for (int i = 0; i < 5; i++)
     {
         char key[64];
@@ -1061,4 +1220,37 @@ static void check_variables(void)
             core->GetInput()->SetTurboSpeed((GG_Controllers)i, GG_KEY_II, speed);
         }
     }
+}
+
+static bool path_has_extension(const char* path, const char* extension)
+{
+    if (!path || !extension)
+        return false;
+
+    const char* dot = strrchr(path, '.');
+    if (!dot || !dot[1])
+        return false;
+
+    dot++;
+
+    while (*dot && *extension)
+    {
+        if (tolower((unsigned char)*dot) != tolower((unsigned char)*extension))
+            return false;
+
+        dot++;
+        extension++;
+    }
+
+    return (*dot == 0) && (*extension == 0);
+}
+
+static bool path_is_cdrom_uri(const char* path)
+{
+    return path && (strncmp(path, "cdrom://", 8) == 0);
+}
+
+static bool path_is_cd_content(const char* path)
+{
+    return path_is_cdrom_uri(path) || path_has_extension(path, "cue") || path_has_extension(path, "chd");
 }

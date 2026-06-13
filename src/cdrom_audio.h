@@ -64,8 +64,11 @@ public:
     void Init(CdRom* cdrom, ScsiController* scsi_controller);
     void Reset();
     void Clock(u32 cycles);
+    void Sample();
     int EndFrame(s16* sample_buffer);
     CdAudioState GetCurrentState();
+    CdAudioState GetSubcodeState();
+    u32 GetSubcodeLBA();
     CdRomAudio_State* GetState();
     void StartAudio(u32 lba, bool pause);
     void StopAudio();
@@ -75,17 +78,17 @@ public:
     s16 GetLeftSample();
     s16 GetRightSample();
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
     void GenerateSamples();
+    void SyncMediaCurrentSector();
 
 private:
     CdRom* m_cdrom;
     CdRomMedia* m_cdrom_media;
     ScsiController* m_scsi_controller;
     CdRomAudio_State m_state;
-    s32 m_sample_cycle_counter;
     s32 m_buffer_index;
     s32 m_frame_samples;
     s16 m_buffer[GG_AUDIO_BUFFER_SIZE] = {};
@@ -93,6 +96,7 @@ private:
     u32 m_start_lba;
     u32 m_stop_lba;
     u32 m_current_lba;
+    u32 m_seek_start_lba;
     u32 m_current_sample;
     CdAudioStopEvent m_stop_event;
     s32 m_seek_cycles;

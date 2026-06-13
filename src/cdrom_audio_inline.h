@@ -34,40 +34,51 @@ INLINE void CdRomAudio::Clock(u32 cycles)
         if (m_seek_cycles <= 0)
         {
             m_seek_cycles = 0;
-            m_scsi_controller->StartStatus(ScsiController::SCSI_STATUS_GOOD);
+            m_seek_start_lba = m_current_lba;
         }
     }
 
-    m_sample_cycle_counter += cycles;
+}
 
-    if (m_sample_cycle_counter >= GG_CDAUDIO_CYCLES_PER_SAMPLE)
+INLINE void CdRomAudio::Sample()
+{
+    m_left_sample = 0;
+    m_right_sample = 0;
+
+    if ((m_current_state == CD_AUDIO_STATE_PLAYING) && (m_seek_cycles == 0))
+        GenerateSamples();
+
+    m_buffer[m_buffer_index + 0] = m_left_sample;
+    m_buffer[m_buffer_index + 1] = m_right_sample;
+
+    m_buffer_index += 2;
+
+    if (m_buffer_index >= GG_AUDIO_BUFFER_SIZE)
     {
-        m_sample_cycle_counter -= GG_CDAUDIO_CYCLES_PER_SAMPLE;
-
-        m_left_sample = 0;
-        m_right_sample = 0;
-
-        if ((m_current_state == CD_AUDIO_STATE_PLAYING) && (m_seek_cycles == 0))
-        {
-            GenerateSamples();
-        }
-
-        m_buffer[m_buffer_index + 0] = m_left_sample;
-        m_buffer[m_buffer_index + 1] = m_right_sample;
-
-        m_buffer_index += 2;
-
-        if (m_buffer_index >= GG_AUDIO_BUFFER_SIZE)
-        {
-            Error("CD AUDIO buffer overflow");
-            m_buffer_index = 0;
-        }
+        Error("CD AUDIO buffer overflow");
+        m_buffer_index = 0;
     }
 }
 
 INLINE CdRomAudio::CdAudioState CdRomAudio::GetCurrentState()
 {
     return m_current_state;
+}
+
+INLINE CdRomAudio::CdAudioState CdRomAudio::GetSubcodeState()
+{
+    if ((m_current_state == CD_AUDIO_STATE_PLAYING) && (m_seek_cycles > 0))
+        return CD_AUDIO_STATE_PAUSED;
+
+    return m_current_state;
+}
+
+INLINE u32 CdRomAudio::GetSubcodeLBA()
+{
+    if ((m_current_state == CD_AUDIO_STATE_PLAYING) && (m_seek_cycles > 0))
+        return m_seek_start_lba;
+
+    return m_current_lba;
 }
 
 INLINE CdRomAudio::CdRomAudio_State* CdRomAudio::GetState()
@@ -83,19 +94,28 @@ INLINE void CdRomAudio::StartAudio(u32 lba, bool pause)
         return;
 
     u32 current_lba = m_cdrom_media->GetCurrentSector();
-    u32 seek_time = m_cdrom_media->SeekTime(current_lba, lba);
-    m_seek_cycles = TimeToCycles(seek_time * 1000);
+    m_seek_start_lba = current_lba;
+    if (pause)
+        m_seek_cycles = 0;
+    else
+    {
+        u32 seek_time = m_cdrom_media->SeekTime(current_lba, lba);
+        m_seek_cycles = TimeToCycles(seek_time * 1000);
+    }
     m_start_lba = lba;
     m_current_lba = lba;
+    if (m_seek_cycles == 0)
+        m_seek_start_lba = m_current_lba;
     m_current_sample = 0;
     m_stop_lba = m_cdrom_media->GetLastSectorOfTrack(track);
     m_stop_event = CD_AUDIO_STOP_EVENT_STOP;
     m_current_state = pause ? CD_AUDIO_STATE_PAUSED : CD_AUDIO_STATE_PLAYING;
+    m_cdrom_media->SetCurrentSector(m_current_lba);
 
     Debug("CD AUDIO: Start audio at LBA %d, track %d, current lba %d, seek cycles %d",
           lba, track, current_lba, m_seek_cycles);
 
-    m_cdrom_media->PreloadTrack(m_cdrom_media->GetTrackFromLBA(m_start_lba));
+    m_cdrom_media->PreloadTrack((u32)track);
 }
 
 INLINE void CdRomAudio::StopAudio()
@@ -115,10 +135,18 @@ INLINE void CdRomAudio::SetIdle()
 
 INLINE void CdRomAudio::SetStopLBA(u32 lba, CdAudioStopEvent event)
 {
-    if (lba >= m_cdrom_media->GetSectorCount())
+    u32 sector_count = m_cdrom_media->GetSectorCount();
+
+    if (sector_count == 0)
+    {
+        Error("Invalid stop LBA %d - no sectors", lba);
+        return;
+    }
+
+    if (lba >= sector_count)
     {
         Error("Invalid stop LBA %d", lba);
-        lba = m_cdrom_media->GetSectorCount() - 1;
+        lba = sector_count - 1;
     }
 
     m_stop_lba = lba;
@@ -168,6 +196,8 @@ INLINE void CdRomAudio::GenerateSamples()
                     break;
             }
         }
+
+        m_cdrom_media->SetCurrentSector(m_current_lba);
     }
 }
 

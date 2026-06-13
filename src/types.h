@@ -90,7 +90,8 @@ enum GG_Controller_Type
 {
     GG_CONTROLLER_STANDARD = 0,
     GG_CONTROLLER_AVENUE_PAD_3,
-    GG_CONTROLLER_AVENUE_PAD_6
+    GG_CONTROLLER_AVENUE_PAD_6,
+    GG_CONTROLLER_MOUSE
 };
 
 enum GG_MB128_Mode
@@ -156,6 +157,7 @@ struct GG_Disassembler_Record
     bool has_operand_address;
     u16 operand_address;
     bool operand_is_zp;
+    char auto_symbol[64];
 };
 
 #endif /* TYPES_H */

@@ -48,6 +48,23 @@ inline bool Media::IsCDROM()
     return m_is_cdrom;
 }
 
+inline bool Media::IsInGameDatabase()
+{
+    return m_is_in_game_database;
+}
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+inline bool Media::IsPhysicalCdRom()
+{
+    return m_is_physical_cdrom;
+}
+
+inline bool Media::HasPhysicalCdRomError()
+{
+    return m_is_physical_cdrom && m_cdrom_media->HasPhysicalDriveError();
+}
+#endif
+
 inline bool Media::IsGameExpress()
 {
     return m_is_gameexpress;
@@ -153,6 +170,13 @@ inline const char* Media::GetFileExtension()
     return m_file_extension;
 }
 
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+inline const char* Media::GetPhysicalCdRomDeviceId()
+{
+    return m_physical_cdrom_device_id;
+}
+#endif
+
 inline const char* Media::GetBiosName(bool syscard)
 {
     return syscard ? m_bios_name_syscard : m_bios_name_gameexpress;
@@ -166,6 +190,11 @@ inline u8* Media::GetROM()
 inline u8** Media::GetROMMap()
 {
     return m_rom_map;
+}
+
+inline u32* Media::GetROMBankOffset()
+{
+    return m_rom_bank_offset;
 }
 
 #endif /* MEDIA_INLINE_H */

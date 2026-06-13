@@ -66,6 +66,8 @@ MemEditor::MemEditor()
     m_find_bytes_buffer[0] = 0;
     m_find_bytes_last_address = -1;
     m_find_bytes_pattern_len = 0;
+    m_breakpoint_callback = NULL;
+    m_breakpoint_editor = -1;
 }
 
 MemEditor::~MemEditor()
@@ -96,7 +98,7 @@ void MemEditor::Reset(const char* title, uint8_t* mem_data, int mem_size, int ba
     while (size >>= 4)
         m_hex_addr_digits++;
 
-    snprintf(m_hex_addr_format, 8, "%%0%dX", m_hex_addr_digits);
+    snprintf(m_hex_addr_format, sizeof(m_hex_addr_format), "%%0%dX", m_hex_addr_digits);
 
     m_search_data = new uint8_t[m_mem_size * m_mem_word];
     memcpy(m_search_data, m_mem_data, m_mem_size * m_mem_word);
@@ -608,7 +610,7 @@ void MemEditor::DrawCursors()
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetColumnWidth() - ImGui::CalcTextSize(all_text).x 
     - ImGui::GetScrollX() - 2 * ImGui::GetStyle().ItemSpacing.x);
 
-    ImVec4 color = ImVec4(0.1f,0.9f,0.9f,1.0f);
+    ImVec4 color = cyan;
 
     ImGui::TextColored(color, "REGION:");
     ImGui::SameLine();
@@ -813,6 +815,29 @@ void MemEditor::DrawContexMenu(int address, bool cell_hovered, bool options)
             }
         }
 
+        if (IsValidPointer(m_breakpoint_callback))
+        {
+            if (ImGui::MenuItem("Toggle Breakpoint"))
+            {
+                int start = address;
+                int end = address;
+
+                if (m_selection_start >= 0 && m_selection_end >= 0)
+                {
+                    int sel_start = MIN(m_selection_start, m_selection_end);
+                    int sel_end = MAX(m_selection_start, m_selection_end);
+
+                    if (address >= sel_start && address <= sel_end)
+                    {
+                        start = sel_start;
+                        end = sel_end;
+                    }
+                }
+
+                m_breakpoint_callback(m_breakpoint_editor, start, end);
+            }
+        }
+
         PopGuiFont();
 
         ImGui::EndPopup();
@@ -957,7 +982,7 @@ void MemEditor::WatchPopup()
             {
                 int watch_address = (int)watch_address_value;
 
-                if (watch_address >= m_mem_base_addr && watch_address < (m_mem_base_addr + m_mem_size))
+                if (CanWatchRangeFit(watch_address, size))
                 {
                     Watch watch;
                     watch.address = watch_address;
@@ -994,7 +1019,7 @@ void MemEditor::SearchCapture()
 {
     if (!IsValidPointer(m_mem_data) || !IsValidPointer(m_search_data) || m_mem_size <= 0)
         return;
-    memcpy(m_search_data, m_mem_data, m_mem_size);
+    memcpy(m_search_data, m_mem_data, m_mem_size * m_mem_word);
 }
 
 int MemEditor::PerformSearch(int op, int compare_type, int compare_value, int data_type)
@@ -1004,6 +1029,12 @@ int MemEditor::PerformSearch(int op, int compare_type, int compare_value, int da
     m_search_compare_specific_value = compare_value;
     m_search_compare_specific_address = compare_value;
     m_search_data_type = data_type;
+
+    if (m_search_compare_type == 2 && !CanSearchAddressFit(m_search_compare_specific_address))
+    {
+        m_search_results.clear();
+        return 0;
+    }
 
     CalculateSearchResults();
 
@@ -1042,10 +1073,41 @@ void MemEditor::GetSelection(int* start, int* end)
     *end = m_selection_end;
 }
 
-void MemEditor::SetSelection(int start, int end)
+bool MemEditor::SetSelection(int start, int end)
 {
-    m_selection_start = start;
-    m_selection_end = end;
+    int start_offset = 0;
+    int end_offset = 0;
+
+    if (!NormalizeSelectionAddress(start, &start_offset) || !NormalizeSelectionAddress(end, &end_offset))
+        return false;
+
+    if (start_offset > end_offset)
+        std::swap(start_offset, end_offset);
+
+    m_selection_start = start_offset;
+    m_selection_end = end_offset;
+
+    return true;
+}
+
+bool MemEditor::NormalizeSelectionAddress(int address, int* offset)
+{
+    if (!IsValidPointer(offset) || !IsValidPointer(m_mem_data) || m_mem_size <= 0 || address < 0)
+        return false;
+
+    if (address >= m_mem_base_addr && address < (m_mem_base_addr + m_mem_size))
+    {
+        *offset = address - m_mem_base_addr;
+        return true;
+    }
+
+    if (address < m_mem_size)
+    {
+        *offset = address;
+        return true;
+    }
+
+    return false;
 }
 
 void MemEditor::ScrollToAddress(int address)
@@ -1085,7 +1147,7 @@ void MemEditor::WatchWindow()
     ImGui::Separator();
 
     const char* size_labels[] = {"8 bit", "16 bit", "24 bit", "32 bit"};
-    const char* format_labels[] = {"Hex", "Binary", "Decimal Unsigned", "Decimal Signed"};
+    const char* format_labels[] = {"Hex", "Binary", "Decimal Unsigned", "Decimal Signed", "ASCII"};
 
     int remove = -1;
 
@@ -1145,40 +1207,119 @@ void MemEditor::WatchWindow()
 
                 ImGui::TableNextColumn();
 
-                char sel_id[16];
-                snprintf(sel_id, sizeof(sel_id), "##wv%d", row);
-                ImGui::Selectable(sel_id, false, ImGuiSelectableFlags_SpanAllColumns);
+                uint32_t value = ReadWatchValue(watch);
 
-                if (ImGui::BeginPopupContextItem())
+                static ImGuiID watch_editing_id = 0;
+                static int watch_frames_editing = 0;
+                static char watch_edit_buffer[12] = {0};
+
+                ImGuiID watch_widget_id = ImGui::GetID("##wve");
+
+                if (watch_editing_id == watch_widget_id)
                 {
-                    PushGuiFont();
+                    int bytes = WatchSizeBytes(watch.size);
+                    int hex_digits = bytes * 2;
 
-                    if (ImGui::Selectable("Remove Watch"))
+                    float text_height = ImGui::GetTextLineHeight();
+                    float frame_height = ImGui::GetFrameHeight();
+                    float padding_reduction = (frame_height - text_height) * 0.5f;
+                    ImVec2 original_padding = ImGui::GetStyle().FramePadding;
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(original_padding.x, original_padding.y - padding_reduction));
+
+                    char digit_str[12];
+                    memset(digit_str, 'F', hex_digits);
+                    digit_str[hex_digits] = '\0';
+                    ImGui::PushItemWidth(ImGui::CalcTextSize(digit_str).x + 6);
+
+                    ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_CharsHexadecimal |
+                                                      ImGuiInputTextFlags_CharsUppercase |
+                                                      ImGuiInputTextFlags_EnterReturnsTrue |
+                                                      ImGuiInputTextFlags_AutoSelectAll;
+
+                    if (watch_frames_editing == 0)
                     {
-                        remove = row;
+                        ImGui::SetKeyboardFocusHere();
                     }
 
-                    ImGui::Separator();
-                    ImGui::Text("Display as:");
-                    //ImGui::Separator();
+                    bool enter_pressed = ImGui::InputText("##wve", watch_edit_buffer, sizeof(watch_edit_buffer), input_flags);
+                    bool lost_focus = (watch_frames_editing > 1) && !ImGui::IsItemActive();
+                    watch_frames_editing++;
 
-                    for (int f = 0; f < 4; f++)
+                    if (enter_pressed)
                     {
-                        bool selected = (watch.format == f);
-                        if (ImGui::Selectable(format_labels[f], selected))
+                        u32 new_value = 0;
+                        if (parse_hex_string(watch_edit_buffer, strlen(watch_edit_buffer), &new_value))
                         {
-                            watch.format = f;
+                            WriteWatchValue(watch, new_value);
+                        }
+                        watch_editing_id = 0;
+                    }
+
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || lost_focus)
+                    {
+                        watch_editing_id = 0;
+                    }
+
+                    ImGui::PopItemWidth();
+                    ImGui::PopStyleVar();
+                }
+                else
+                {
+                    char sel_id[16];
+                    snprintf(sel_id, sizeof(sel_id), "##wv%d", row);
+                    ImGui::Selectable(sel_id, false, ImGuiSelectableFlags_SpanAllColumns);
+
+                    if (ImGui::BeginPopupContextItem())
+                    {
+                        PushGuiFont();
+
+                        if (ImGui::Selectable("Remove Watch"))
+                        {
+                            remove = row;
+                        }
+
+                        ImGui::Separator();
+                        ImGui::Text("Display as:");
+
+                        for (int f = 0; f < 5; f++)
+                        {
+                            bool selected = (watch.format == f);
+                            if (ImGui::Selectable(format_labels[f], selected))
+                            {
+                                watch.format = f;
+                            }
+                        }
+
+                        PopGuiFont();
+
+                        ImGui::EndPopup();
+                    }
+
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                    {
+                        watch_editing_id = watch_widget_id;
+                        watch_frames_editing = 0;
+                        int bytes = WatchSizeBytes(watch.size);
+                        switch (bytes)
+                        {
+                            case 1:
+                                snprintf(watch_edit_buffer, sizeof(watch_edit_buffer), "%02X", value);
+                                break;
+                            case 2:
+                                snprintf(watch_edit_buffer, sizeof(watch_edit_buffer), "%04X", value);
+                                break;
+                            case 3:
+                                snprintf(watch_edit_buffer, sizeof(watch_edit_buffer), "%06X", value);
+                                break;
+                            case 4:
+                                snprintf(watch_edit_buffer, sizeof(watch_edit_buffer), "%08X", value);
+                                break;
                         }
                     }
 
-                    PopGuiFont();
-
-                    ImGui::EndPopup();
+                    ImGui::SameLine(0, 0);
+                    DrawWatchValue(value, watch.size, watch.format);
                 }
-
-                ImGui::SameLine(0, 0);
-                uint32_t value = ReadWatchValue(watch);
-                DrawWatchValue(value, watch.size, watch.format);
 
                 ImGui::TableNextColumn();
 
@@ -1380,6 +1521,18 @@ void MemEditor::CalculateSearchResults()
 
     m_search_results.clear();
 
+    int compare_address_value = 0;
+    if (m_search_compare_type == 2)
+    {
+        if (!CanSearchAddressFit(m_search_compare_specific_address))
+            return;
+
+        if (m_mem_word == 1)
+            compare_address_value = m_mem_data[m_search_compare_specific_address];
+        else if (m_mem_word == 2)
+            compare_address_value = ((uint16_t*)m_mem_data)[m_search_compare_specific_address];
+    }
+
     for (int i = 0; i < m_mem_size; i++)
     {
         int compare_value = 0;
@@ -1427,10 +1580,7 @@ void MemEditor::CalculateSearchResults()
                 break;
             // Specific address
             case 2:
-                if (m_mem_word == 1)
-                    compare_value = m_mem_data[m_search_compare_specific_address];
-                else if (m_mem_word == 2)
-                    compare_value = mem_data_16[m_search_compare_specific_address];
+                compare_value = compare_address_value;
                 break;
         }
 
@@ -1648,10 +1798,25 @@ void MemEditor::ClearSelection()
 
 void MemEditor::SetValueToSelection(int value)
 {
-    int selection_size = (m_selection_end - m_selection_start + 1) * m_mem_word;
-    int start = m_selection_start * m_mem_word;
-    int end = start + selection_size;
+    if (!IsValidPointer(m_mem_data) || m_mem_size <= 0 || m_mem_word <= 0)
+        return;
+
+    int selection_start = m_selection_start;
+    int selection_end = m_selection_end;
+
+    if (selection_start > selection_end)
+        std::swap(selection_start, selection_end);
+
+    if (selection_start < 0 || selection_end < 0 || selection_start >= m_mem_size || selection_end >= m_mem_size)
+        return;
+
+    int start = selection_start * m_mem_word;
+    int end = (selection_end + 1) * m_mem_word;
+    int total = m_mem_size * m_mem_word;
     int mask = m_mem_word == 1 ? 0xFF : 0xFFFF;
+
+    if (start < 0 || end > total || start >= end)
+        return;
 
     for (int i = start; i < end; i++)
     {
@@ -1706,7 +1871,32 @@ void MemEditor::SaveToBinaryFile(const char* file_path)
 
     if (file)
     {
-        fwrite(m_mem_data, m_mem_word, size, file);
+        size_t bytes = (size_t)size;
+        if (fwrite(m_mem_data, 1, bytes, file) != bytes)
+        {
+            fclose(file);
+            return;
+        }
+        fclose(file);
+    }
+}
+
+void MemEditor::LoadFromBinaryFile(const char* file_path)
+{
+    if (!IsValidPointer(m_mem_data) || m_mem_size <= 0 || m_mem_word <= 0)
+        return;
+
+    int size = m_mem_size * m_mem_word;
+
+    FILE* file = fopen_utf8(file_path, "rb");
+    if (file)
+    {
+        size_t bytes = (size_t)size;
+        if (fread(m_mem_data, 1, bytes, file) != bytes)
+        {
+            fclose(file);
+            return;
+        }
         fclose(file);
     }
 }
@@ -1837,7 +2027,6 @@ void MemEditor::FindBytesWindow()
     ImGui::SetNextWindowSize(ImVec2(300, 300), ImGuiCond_FirstUseEver);
     char window_title[64];
     snprintf(window_title, 64, "%s Find Bytes", m_title);
-
     ImGui::Begin(window_title, &m_find_bytes_window);
 
     ImGui::Text("Hex Bytes:");
@@ -1998,9 +2187,14 @@ void MemEditor::PrepareAddWatch(int address, const char* notes)
     m_add_watch = true;
 }
 
-void MemEditor::AddWatchDirect(int address, const char* notes, int size)
+bool MemEditor::AddWatchDirect(int address, const char* notes, int size)
 {
     Watch watch;
+    int size_index = (size >= 0 && size <= 3) ? size : 0;
+
+    if (!CanWatchRangeFit(address, size_index))
+        return false;
+
     watch.address = address;
 
     if (notes && strlen(notes) > 0)
@@ -2008,18 +2202,50 @@ void MemEditor::AddWatchDirect(int address, const char* notes, int size)
     else
         snprintf(watch.notes, 128, "Watch_%04X", address);
 
-    watch.size = (size >= 0 && size <= 3) ? size : 0;
+    watch.size = size_index;
     watch.format = 0;
     m_watches.push_back(watch);
     m_watch_window = true;
+
+    return true;
+}
+
+bool MemEditor::CanWatchRangeFit(int address, int size)
+{
+    if (!IsValidPointer(m_mem_data) || m_mem_size <= 0 || m_mem_word <= 0)
+        return false;
+
+    int bytes = WatchSizeBytes(size);
+    int total_bytes = m_mem_size * m_mem_word;
+
+    if (address < m_mem_base_addr)
+        return false;
+
+    int byte_offset = (address - m_mem_base_addr) * m_mem_word;
+
+    if (bytes <= 0 || byte_offset < 0 || byte_offset > total_bytes - bytes)
+        return false;
+
+    return true;
+}
+
+bool MemEditor::CanSearchAddressFit(int address)
+{
+    return IsValidPointer(m_mem_data) && IsValidPointer(m_search_data) && m_mem_size > 0 && address >= 0 && address < m_mem_size;
 }
 
 uint32_t MemEditor::ReadWatchValue(const Watch& watch)
 {
+    if (!CanWatchRangeFit(watch.address, watch.size))
+        return 0;
+
     int bytes = WatchSizeBytes(watch.size);
     int byte_offset = (watch.address - m_mem_base_addr) * m_mem_word;
     int total_bytes = m_mem_size * m_mem_word;
     uint32_t value = 0;
+
+    if (byte_offset < 0 || byte_offset >= total_bytes)
+        return 0;
 
     for (int i = 0; i < bytes && (byte_offset + i) < total_bytes; i++)
     {
@@ -2027,6 +2253,21 @@ uint32_t MemEditor::ReadWatchValue(const Watch& watch)
     }
 
     return value;
+}
+
+void MemEditor::WriteWatchValue(const Watch& watch, uint32_t value)
+{
+    if (!CanWatchRangeFit(watch.address, watch.size))
+        return;
+
+    int bytes = WatchSizeBytes(watch.size);
+    int byte_offset = (watch.address - m_mem_base_addr) * m_mem_word;
+    int total_bytes = m_mem_size * m_mem_word;
+
+    for (int i = 0; i < bytes && (byte_offset + i) < total_bytes; i++)
+    {
+        m_mem_data[byte_offset + i] = (uint8_t)((value >> (i * 8)) & 0xFF);
+    }
 }
 
 int MemEditor::WatchSizeBytes(int size)
@@ -2093,6 +2334,18 @@ void MemEditor::DrawWatchValue(uint32_t value, int size, int format)
                 default: signed_value = (int32_t)value; break;
             }
             ImGui::TextColored(color, "%d", signed_value);
+            break;
+        }
+        case 4: // ASCII
+        {
+            char ascii[5];
+            for (int i = 0; i < bytes; i++)
+            {
+                uint8_t c = (uint8_t)((value >> (i * 8)) & 0xFF);
+                ascii[i] = (c >= 32 && c < 127) ? (char)c : '.';
+            }
+            ascii[bytes] = '\0';
+            ImGui::TextColored(color, "%s", ascii);
             break;
         }
     }
@@ -2164,4 +2417,10 @@ void MemEditor::LoadSettings(std::istream& stream)
         stream.read((char*)&watch.format, sizeof(int));
         m_watches.push_back(watch);
     }
+}
+
+void MemEditor::SetBreakpointCallback(ContextMenuBreakpointCallback callback, int editor)
+{
+    m_breakpoint_callback = callback;
+    m_breakpoint_editor = editor;
 }

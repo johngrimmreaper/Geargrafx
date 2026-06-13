@@ -33,6 +33,7 @@ struct MemoryAreaInfo
     int id;
     std::string name;
     u32 size;
+    u32 unit_size;
     u8* data;
 };
 
@@ -56,8 +57,8 @@ struct BreakpointInfo
 {
     bool enabled;
     int type;
-    u16 address1;
-    u16 address2;
+    u32 address1;
+    u32 address2;
     bool read;
     bool write;
     bool execute;
@@ -103,9 +104,9 @@ public:
     json RunToAddress(u16 address);
 
     // Breakpoints
-    void SetBreakpoint(u16 address, int type, bool read, bool write, bool execute);
-    void SetBreakpointRange(u16 start_address, u16 end_address, int type, bool read, bool write, bool execute);
-    void ClearBreakpointByAddress(u16 address, int type, u16 end_address = 0);
+    bool SetBreakpoint(u32 address, int type, bool read, bool write, bool execute);
+    bool SetBreakpointRange(u32 start_address, u32 end_address, int type, bool read, bool write, bool execute);
+    bool ClearBreakpointByAddress(u32 address, int type, bool range = false, u32 end_address = 0);
     std::vector<BreakpointInfo> ListBreakpoints();
 
     // Registers
@@ -139,7 +140,9 @@ public:
 
     // Media and state management
     json GetMediaInfo();
+    json ListRecentMedia();
     json LoadMedia(const std::string& file_path);
+    json LoadBios(const std::string& file_path, bool syscard);
     json ListSaveStateSlots();
     json SelectSaveStateSlot(int slot);
     json SaveState();
@@ -152,6 +155,8 @@ public:
     json ControllerSetType(int player, const std::string& type);
     json ControllerSetTurboTap(bool enabled);
     json ControllerGetType(int player);
+    bool IsMouseController(int player) const;
+    bool ApplyMouseMotion(int player, int delta_x, int delta_y);
 
     // Disassembler operations
     json AddDisassemblerBookmark(u16 address, const std::string& name);
@@ -176,6 +181,12 @@ public:
     json MemorySearchCapture(int area);
     json MemorySearch(int area, const std::string& op, const std::string& compare_type, int compare_value, const std::string& data_type);
     json MemoryFindBytes(int area, const std::string& hex_bytes);
+    json GetTraceLog(int start, int count);
+    json SetTraceLog(bool enabled, u32 flags);
+
+    // Rewind
+    json GetRewindStatus();
+    json RewindSeek(int snapshot);
 
     // Core access
     GeargrafxCore* GetCore() { return m_core; }

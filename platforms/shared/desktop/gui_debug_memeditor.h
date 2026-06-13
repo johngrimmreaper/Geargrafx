@@ -26,6 +26,8 @@
 #include <iostream>
 #include "imgui.h"
 
+typedef void (*ContextMenuBreakpointCallback)(int editor, int start, int end);
+
 class MemEditor
 {
 public:
@@ -76,6 +78,7 @@ public:
     void SetValueToSelection(int value);
     void SaveToTextFile(const char* file_path);
     void SaveToBinaryFile(const char* file_path);
+    void LoadFromBinaryFile(const char* file_path);
     void AddBookmark();
     void RemoveBookmarks();
     std::vector<Bookmark>* GetBookmarks();
@@ -84,7 +87,7 @@ public:
     void OpenFindBytes();
     void AddWatch();
     void PrepareAddWatch(int address, const char* notes);
-    void AddWatchDirect(int address, const char* notes, int size);
+    bool AddWatchDirect(int address, const char* notes, int size);
     void RemoveWatches();
     std::vector<Watch>* GetWatches();
     void SetGuiFont(ImFont* gui_font);
@@ -99,12 +102,13 @@ public:
     int GetWordBytes();
     char* GetTitle();
     void GetSelection(int* start, int* end);
-    void SetSelection(int start, int end);
+    bool SetSelection(int start, int end);
     void ScrollToAddress(int address);
     void SearchCapture();
     int PerformSearch(int op, int compare_type, int compare_value, int data_type);
     std::vector<Search>* GetSearchResults();
     int FindBytesSequence(const char* hex_str, int* out_addresses, int max_results);
+    void SetBreakpointCallback(ContextMenuBreakpointCallback cb, int editor);
 
 private:
     bool IsColumnSeparator(int current_column, int column_count);
@@ -128,7 +132,11 @@ private:
     void DrawSearchValue(int value, ImVec4 color);
     void FindBytesNext(int start_offset);
     bool ParseHexByteString(const char* str, uint8_t* out, int* out_len, int max_len);
+    bool NormalizeSelectionAddress(int address, int* offset);
+    bool CanWatchRangeFit(int address, int size);
+    bool CanSearchAddressFit(int address);
     uint32_t ReadWatchValue(const Watch& watch);
+    void WriteWatchValue(const Watch& watch, uint32_t value);
     int WatchSizeBytes(int size);
     void DrawWatchValue(uint32_t value, int size, int format);
     void PushGuiFont();
@@ -149,7 +157,7 @@ private:
     uint8_t* m_mem_data;
     int m_mem_size;
     int m_mem_base_addr;
-    char m_hex_addr_format[8];
+    char m_hex_addr_format[16];
     int m_hex_addr_digits;
     int m_mem_word;
     char m_goto_address[7];
@@ -179,6 +187,8 @@ private:
     int m_find_bytes_last_address;
     int m_find_bytes_pattern_len;
     std::vector<int> m_find_bytes_results;
+    ContextMenuBreakpointCallback m_breakpoint_callback;
+    int m_breakpoint_editor;
 };
 
 #endif /* GUI_DEBUG_MEMEDITOR_H */

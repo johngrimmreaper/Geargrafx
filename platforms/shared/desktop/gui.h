@@ -38,9 +38,17 @@ enum gui_ShortCutEvent
     gui_ShortcutReset,
     gui_ShortcutPause,
     gui_ShortcutFFWD,
+    gui_ShortcutMute,
     gui_ShortcutSaveState,
     gui_ShortcutLoadState,
+    gui_ShortcutSelectSlot1,
+    gui_ShortcutSelectSlot2,
+    gui_ShortcutSelectSlot3,
+    gui_ShortcutSelectSlot4,
+    gui_ShortcutSelectSlot5,
     gui_ShortcutScreenshot,
+    gui_ShortcutFullscreen,
+    gui_ShortcutCaptureMouse,
     gui_ShortcutDebugStepOver,
     gui_ShortcutDebugStepInto,
     gui_ShortcutDebugStepOut,
@@ -58,12 +66,12 @@ enum gui_ShortCutEvent
 
 struct gui_HotkeyMapping
 {
-    int shortcut;
+    gui_ShortCutEvent shortcut;
     int config_index;
     bool allow_repeat;
 };
 
-#define GUI_HOTKEY_MAP_COUNT 18
+#define GUI_HOTKEY_MAP_COUNT 26
 
 const gui_HotkeyMapping gui_hotkey_map[GUI_HOTKEY_MAP_COUNT] = {
     {gui_ShortcutOpenROM, config_HotkeyIndex_OpenROM, false},
@@ -71,9 +79,17 @@ const gui_HotkeyMapping gui_hotkey_map[GUI_HOTKEY_MAP_COUNT] = {
     {gui_ShortcutReset, config_HotkeyIndex_Reset, false},
     {gui_ShortcutPause, config_HotkeyIndex_Pause, false},
     {gui_ShortcutFFWD, config_HotkeyIndex_FFWD, false},
+    {gui_ShortcutMute, config_HotkeyIndex_Mute, false},
     {gui_ShortcutSaveState, config_HotkeyIndex_SaveState, false},
     {gui_ShortcutLoadState, config_HotkeyIndex_LoadState, false},
+    {gui_ShortcutSelectSlot1, config_HotkeyIndex_SelectSlot1, false},
+    {gui_ShortcutSelectSlot2, config_HotkeyIndex_SelectSlot2, false},
+    {gui_ShortcutSelectSlot3, config_HotkeyIndex_SelectSlot3, false},
+    {gui_ShortcutSelectSlot4, config_HotkeyIndex_SelectSlot4, false},
+    {gui_ShortcutSelectSlot5, config_HotkeyIndex_SelectSlot5, false},
     {gui_ShortcutScreenshot, config_HotkeyIndex_Screenshot, false},
+    {gui_ShortcutFullscreen, config_HotkeyIndex_Fullscreen, false},
+    {gui_ShortcutCaptureMouse, config_HotkeyIndex_CaptureMouse, false},
     {gui_ShortcutShowMainMenu, config_HotkeyIndex_ShowMainMenu, false},
     {gui_ShortcutDebugStepInto, config_HotkeyIndex_DebugStepInto, true},
     {gui_ShortcutDebugStepOver, config_HotkeyIndex_DebugStepOver, true},
@@ -111,8 +127,10 @@ EXTERN void gui_destroy(void);
 EXTERN void gui_render(void);
 EXTERN void gui_shortcut(gui_ShortCutEvent event);
 EXTERN void gui_load_rom(const char* path);
+EXTERN void gui_load_physical_cdrom(const char* device_id);
 EXTERN void gui_load_bios(const char* path, bool syscard);
 EXTERN void gui_load_palette(const char* path);
+EXTERN void gui_set_style(void);
 EXTERN void gui_set_status_message(const char* message, Uint64 milliseconds);
 EXTERN void gui_set_error_message(const char* message);
 

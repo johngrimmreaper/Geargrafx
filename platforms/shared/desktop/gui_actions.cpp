@@ -23,6 +23,9 @@
 #include "gui_debug_trace_logger.h"
 #include "config.h"
 #include "emu.h"
+#include "ogl_renderer.h"
+#include "rewind.h"
+#include "events.h"
 #include "geargrafx.h"
 #include "application.h"
 #include "display.h"
@@ -39,7 +42,7 @@ void gui_action_reset(void)
     {
         emu_pause();
 
-        for (int i=0; i < (HUC6270_MAX_RESOLUTION_WIDTH * HUC6270_MAX_RESOLUTION_HEIGHT); i++)
+        for (int i = 0; i < SYSTEM_TEXTURE_WIDTH * SYSTEM_TEXTURE_HEIGHT * 4; i++)
         {
             emu_frame_buffer[i] = 0;
         }
@@ -50,10 +53,43 @@ void gui_action_reload_rom(void)
 {
     if (!emu_is_empty())
     {
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+        if (emu_get_core()->GetMedia()->IsPhysicalCdRom())
+        {
+            gui_load_physical_cdrom(emu_get_core()->GetMedia()->GetPhysicalCdRomDeviceId());
+            return;
+        }
+#endif
+
         char rom_path[4096];
-        strcpy(rom_path, emu_get_core()->GetMedia()->GetFilePath());
+        strncpy_fit(rom_path, emu_get_core()->GetMedia()->GetFilePath(), sizeof(rom_path));
         gui_load_rom(rom_path);
     }
+}
+
+void gui_action_eject_physical_cdrom(void)
+{
+    #if defined(GG_ENABLE_PHYSICAL_CDROM)
+    if (emu_is_empty() || !emu_get_core()->GetMedia()->IsPhysicalCdRom())
+    {
+        Debug("Physical CD-ROM eject requested but no physical CD-ROM is loaded");
+        gui_set_status_message("No physical CD-ROM loaded", 3000);
+        return;
+    }
+
+    char device_id[256];
+    strncpy_fit(device_id, emu_get_core()->GetMedia()->GetPhysicalCdRomDeviceId(), sizeof(device_id));
+
+    Log("Physical CD-ROM eject requested from GUI: %s", device_id);
+
+    if (emu_eject_physical_cdrom())
+    {
+        application_update_title_with_rom(NULL);
+        gui_set_status_message("Physical CD-ROM ejected", 3000);
+    }
+    else
+        gui_set_error_message("Unable to eject physical CD-ROM");
+    #endif
 }
 
 void gui_action_pause(void)
@@ -87,6 +123,34 @@ void gui_action_ffwd(void)
     }
 }
 
+void gui_action_rewind_pressed(void)
+{
+    if (emu_is_empty() || !config_rewind.enabled)
+        return;
+    if (rewind_get_snapshot_count() < 1)
+        return;
+
+    if (rewind_is_active())
+        return;
+
+    emu_reset_rewind_timing();
+    rewind_set_active(true);
+    display_set_vsync(config_video.sync);
+    gui_set_status_message("Rewinding...", 500);
+}
+
+void gui_action_rewind_released(void)
+{
+    if (!rewind_is_active())
+        return;
+
+    rewind_set_active(false);
+    events_sync_input();
+    emu_reset_rewind_timing();
+    display_set_vsync(config_emulator.ffwd ? false : config_video.sync);
+    emu_audio_reset();
+}
+
 void gui_action_save_screenshot(const char* path)
 {
     using namespace std;
@@ -97,7 +161,10 @@ void gui_action_save_screenshot(const char* path)
     time_t now = time(0);
     tm* ltm = localtime(&now);
 
-    string date_time = to_string(1900 + ltm->tm_year) + "-" + to_string(1 + ltm->tm_mon) + "-" + to_string(ltm->tm_mday) + " " + to_string(ltm->tm_hour) + to_string(ltm->tm_min) + to_string(ltm->tm_sec);
+    char date_time_buffer[32] = {};
+    if (ltm != NULL)
+        strftime(date_time_buffer, sizeof(date_time_buffer), "%Y-%m-%d %H%M%S", ltm);
+    string date_time = date_time_buffer;
 
     string file_path;
 
@@ -119,6 +186,11 @@ void gui_action_save_screenshot(const char* path)
             }
             case Directory_Location_ROM:
             {
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+                if (emu_get_core()->GetMedia()->IsPhysicalCdRom())
+                    file_path = file_path.assign(config_root_path) + "/" + string(emu_get_core()->GetMedia()->GetFileName()) + " - " + date_time + ".png";
+                else
+#endif
                 file_path = file_path.assign(emu_get_core()->GetMedia()->GetFilePath()) + " - " + date_time + ".png";
                 break;
             }

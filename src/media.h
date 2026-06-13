@@ -44,6 +44,10 @@ public:
     bool IsHES();
     bool IsSGX();
     bool IsCDROM();
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    bool IsPhysicalCdRom();
+#endif
+    bool IsInGameDatabase();
     bool IsGameExpress();
     bool IsArcadeCard();
     bool IsMB128();
@@ -68,10 +72,16 @@ public:
     const char* GetBiosName(bool syscard);
     u8* GetROM();
     u8** GetROMMap();
+    u32* GetROMBankOffset();
     bool LoadMedia(const char* path);
     bool LoadHuCardFromBuffer(const u8* buffer, int size, const char* path);
     bool LoadCueFromFile(const char* path);
     bool LoadChdFromFile(const char* path);
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    bool LoadPhysicalCdRom(const char* device_id);
+    const char* GetPhysicalCdRomDeviceId();
+    bool HasPhysicalCdRomError();
+#endif
     bool LoadBios(const char* file_path, bool syscard);
     void SetTempPath(const char* path);
     void GatherMediaInfo();
@@ -88,6 +98,7 @@ private:
     CdRomMedia* m_cdrom_media;
     u8* m_rom;
     u8** m_rom_map;
+    u32* m_rom_bank_offset;
     int m_rom_size;
     int m_card_ram_size;
     bool m_ready;
@@ -103,6 +114,11 @@ private:
     bool m_is_gameexpress;
     bool m_is_sgx;
     bool m_is_cdrom;
+    bool m_is_in_game_database;
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    bool m_is_physical_cdrom;
+    char m_physical_cdrom_device_id[256];
+#endif
     bool m_is_mb128;
     bool m_is_loaded_bios_syscard;
     bool m_is_loaded_bios_gameexpress;

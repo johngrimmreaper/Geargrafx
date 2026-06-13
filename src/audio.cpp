@@ -30,8 +30,12 @@ Audio::Audio(Adpcm* adpcm, CdRomAudio* cdrom_audio)
     m_adpcm = adpcm;
     m_cdrom_audio = cdrom_audio;
     InitPointer(m_psg);
+    InitPointer(m_trace_logger);
     m_mute = false;
     m_is_cdrom = false;
+    m_cycle_counter = 0;
+    m_sample_clock_counter = 0;
+    m_master_volume = 1.0f;
     m_psg_volume = 1.0f;
     m_adpcm_volume = 1.0f;
     m_cdrom_volume = 1.0f;
@@ -49,10 +53,16 @@ void Audio::Init()
     m_psg->Init();
 }
 
+void Audio::SetTraceLogger(TraceLogger* trace_logger)
+{
+    m_trace_logger = trace_logger;
+}
+
 void Audio::Reset(bool cdrom)
 {
     m_is_cdrom = cdrom;
     m_cycle_counter = 0;
+    m_sample_clock_counter = 0;
     m_psg->Reset();
 
     memset(m_psg_buffer, 0, sizeof(m_psg_buffer));
@@ -93,11 +103,6 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
             count_cdrom = GG_AUDIO_BUFFER_SIZE;
         }
 
-        if (count_psg != count_adpcm || count_adpcm != count_cdrom)
-        {
-            Error("Audio buffers have different sample counts: PSG=%d, ADPCM=%d, CDROM=%d", count_psg, count_adpcm, count_cdrom);
-        }
-
         int samples = count_psg;
 
         *sample_count = samples;
@@ -112,13 +117,9 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
                 mix += (s32)(m_psg_buffer[i] * m_psg_volume);
                 mix += (s32)(m_adpcm_buffer[i] * m_adpcm_volume);
                 mix += (s32)(m_cdrom_buffer[i] * m_cdrom_volume);
+                mix = (s32)((float)mix * m_master_volume);
 
-                if (mix > 32767)
-                    mix = 32767;
-                else if (mix < -32768)
-                    mix = -32768;
-
-                sample_buffer[i] = (s16)mix;
+                sample_buffer[i] = (s16)CLAMP(mix, -32768, 32767);
             }
         }
     }
@@ -136,20 +137,15 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
 
         *sample_count = samples;
 
-        if (m_mute || (m_psg_volume <= 0.0f))
+        if (m_mute || (m_master_volume <= 0.0f) || (m_psg_volume <= 0.0f))
             memset(sample_buffer, 0, sizeof(s16) * samples);
         else
         {
             for (int i = 0; i < samples; i++)
             {
-                s32 mix = (s32)(m_psg_buffer[i] * m_psg_volume);
+                s32 mix = (s32)(m_psg_buffer[i] * m_psg_volume * m_master_volume);
 
-                if (mix > 32767)
-                    mix = 32767;
-                else if (mix < -32768)
-                    mix = -32768;
-
-                sample_buffer[i] = (s16)mix;
+                sample_buffer[i] = (s16)CLAMP(mix, -32768, 32767);
             }
         }
     }
@@ -164,6 +160,7 @@ void Audio::SaveState(std::ostream& stream)
 {
     using namespace std;
     stream.write(reinterpret_cast<const char*> (&m_cycle_counter), sizeof(m_cycle_counter));
+    stream.write(reinterpret_cast<const char*> (&m_sample_clock_counter), sizeof(m_sample_clock_counter));
     m_psg->SaveState(stream);
 }
 
@@ -171,6 +168,10 @@ void Audio::LoadState(std::istream& stream, int version)
 {
     using namespace std;
     stream.read(reinterpret_cast<char*> (&m_cycle_counter), sizeof(m_cycle_counter));
+    if (version >= 32)
+        stream.read(reinterpret_cast<char*> (&m_sample_clock_counter), sizeof(m_sample_clock_counter));
+    else
+        m_sample_clock_counter = 0;
     m_psg->LoadState(stream, version);
 }
 
@@ -225,6 +226,9 @@ bool Audio::StartVgmRecording(const char* file_path, int clock_rate)
                 m_vgm_recorder.WriteHuC6280(0x0807, psg_state->CHANNELS[i].noise_control);
             }
         }
+
+        // Restore channel select after dumping per-channel state.
+        m_vgm_recorder.WriteHuC6280(0x0800, *psg_state->CHANNEL_SELECT);
 
         // 0x0808 - LFO frequency
         m_vgm_recorder.WriteHuC6280(0x0808, *psg_state->LFO_FREQUENCY & 0xFF);

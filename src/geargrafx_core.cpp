@@ -31,6 +31,7 @@
 #include "huc6260.h"
 #include "huc6270.h"
 #include "huc6280.h"
+#include "trace_logger.h"
 #include "scsi_controller.h"
 #include "cdrom.h"
 #include "cdrom_media.h"
@@ -56,14 +57,16 @@ GeargrafxCore::GeargrafxCore()
     InitPointer(m_audio);
     InitPointer(m_input);
     InitPointer(m_media);
-    InitPointer(m_debug_callback);
+    InitPointer(m_trace_logger);
     m_paused = true;
     m_master_clock_cycles = 0;
+    m_frame_ready = false;
     m_mb128_mode = GG_MB128_AUTO;
 }
 
 GeargrafxCore::~GeargrafxCore()
 {
+    SafeDelete(m_trace_logger);
     SafeDelete(m_media);
     SafeDelete(m_input);
     SafeDelete(m_audio);
@@ -93,7 +96,7 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_huc6270_2 = new HuC6270(m_huc6280);
     m_huc6202 = new HuC6202(m_huc6270_1, m_huc6270_2, m_huc6280);
     m_huc6260 = new HuC6260(m_huc6202, m_huc6280);
-    m_input = new Input(m_media);
+    m_input = new Input(m_media, this);
     m_adpcm = new Adpcm();
     m_cdrom_audio = new CdRomAudio(m_cdrom_media);
     m_audio = new Audio(m_adpcm, m_cdrom_audio);
@@ -110,11 +113,22 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_memory->Init();
     m_huc6260->Init(pixel_format);
     m_huc6202->Init();
-    m_huc6270_1->Init(m_huc6260, m_huc6202, input_pump_fn);
-    m_huc6270_2->Init(m_huc6260, m_huc6202, NULL);
+    m_huc6270_1->Init(m_huc6260, m_huc6202, input_pump_fn, 0);
+    m_huc6270_2->Init(m_huc6260, m_huc6202, NULL, 1);
     m_huc6280->Init(m_memory, m_huc6202);
     m_adpcm->Init(this, m_cdrom, m_scsi_controller);
     m_cdrom_audio->Init(m_cdrom, m_scsi_controller);
+
+    m_trace_logger = new TraceLogger();
+    m_huc6280->SetTraceLogger(m_trace_logger);
+    m_huc6270_1->SetTraceLogger(m_trace_logger);
+    m_huc6270_2->SetTraceLogger(m_trace_logger);
+    m_huc6260->SetTraceLogger(m_trace_logger);
+    m_audio->SetTraceLogger(m_trace_logger);
+    m_input->SetTraceLogger(m_trace_logger);
+    m_cdrom->SetTraceLogger(m_trace_logger);
+    m_adpcm->SetTraceLogger(m_trace_logger);
+    m_scsi_controller->SetTraceLogger(m_trace_logger);
 }
 
 bool GeargrafxCore::LoadMedia(const char* file_path)
@@ -128,6 +142,20 @@ bool GeargrafxCore::LoadMedia(const char* file_path)
     else
         return false;
 }
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+bool GeargrafxCore::LoadPhysicalCdRom(const char* device_id)
+{
+    if (m_media->LoadPhysicalCdRom(device_id))
+    {
+        m_memory->ResetDisassemblerRecords();
+        Reset();
+        return true;
+    }
+    else
+        return false;
+}
+#endif
 
 bool GeargrafxCore::LoadHuCardFromBuffer(const u8* buffer, int size, const char* path)
 {
@@ -155,9 +183,9 @@ bool GeargrafxCore::GetRuntimeInfo(GG_Runtime_Info& runtime_info)
     return m_media->IsReady();
 }
 
-void GeargrafxCore::SetDebugCallback(GG_Debug_Callback callback)
+TraceLogger* GeargrafxCore::GetTraceLogger()
 {
-    m_debug_callback = callback;
+    return m_trace_logger;
 }
 
 void GeargrafxCore::KeyPressed(GG_Controllers controller, GG_Keys key)
@@ -235,8 +263,7 @@ void GeargrafxCore::SaveRam(const char* path, bool full_path)
             final_path = path;
             if (!full_path)
             {
-                final_path += "/";
-                final_path += m_media->GetFileName();
+                append_path_component(final_path, m_media->GetFileName());
             }
         }
         else
@@ -275,7 +302,7 @@ void GeargrafxCore::SaveMB128(const char* path, bool full_path)
         {
             final_path = path;
             if (!full_path)
-                final_path += "/mb128.sav";
+                append_path_component(final_path, "mb128.sav");
         }
         else
         {
@@ -304,7 +331,7 @@ void GeargrafxCore::LoadMB128(const char* path, bool full_path)
         {
             final_path = path;
             if (!full_path)
-                final_path += "/mb128.sav";
+                append_path_component(final_path, "mb128.sav");
         }
         else
         {
@@ -343,7 +370,7 @@ void GeargrafxCore::LoadMB128(const char* path, bool full_path)
 
 void GeargrafxCore::LoadRam(const char* path, bool full_path)
 {
-    if (m_media->IsReady())
+    if (m_media->IsReady() && m_memory->IsBackupRamEnabled())
     {
         using namespace std;
         string final_path;
@@ -353,8 +380,7 @@ void GeargrafxCore::LoadRam(const char* path, bool full_path)
             final_path = path;
             if (!full_path)
             {
-                final_path += "/";
-                final_path += m_media->GetFileName();
+                append_path_component(final_path, m_media->GetFileName());
             }
         }
         else
@@ -398,7 +424,19 @@ void GeargrafxCore::LoadRam(const char* path, bool full_path)
 std::string GeargrafxCore::GetSaveStatePath(const char* path, int index)
 {
     if (index < 0)
-        return path;
+    {
+        if (IsValidPointer(path))
+            return path;
+
+        using namespace std;
+        string full_path = m_media->GetFilePath();
+        string::size_type dot_index = full_path.rfind('.');
+
+        if (dot_index != string::npos)
+            full_path.replace(dot_index + 1, full_path.length() - dot_index - 1, "state");
+
+        return full_path;
+    }
 
     using namespace std;
     string full_path;
@@ -406,8 +444,7 @@ std::string GeargrafxCore::GetSaveStatePath(const char* path, int index)
     if (IsValidPointer(path))
     {
         full_path = path;
-        full_path += "/";
-        full_path += m_media->GetFileName();
+        append_path_component(full_path, m_media->GetFileName());
     }
     else
         full_path = m_media->GetFilePath();
@@ -434,13 +471,30 @@ bool GeargrafxCore::SaveState(const char* path, int index, bool screenshot)
     ofstream stream;
     open_ofstream_utf8(stream, full_path.c_str(), ios::out | ios::binary);
 
-    size_t size;
-    bool ret = SaveState(stream, size, screenshot);
-    if (ret)
-        Log("Saved state to %s", full_path.c_str());
-    else
-        Error("Failed to save state to %s", full_path.c_str());
-    return ret;
+    if (!stream.is_open())
+    {
+        Error("Failed to open save state file for writing: %s", full_path.c_str());
+        return false;
+    }
+
+    size_t size = 0;
+    if (!SaveState(stream, size, screenshot))
+    {
+        stream.close();
+        Error("Failed to save state to file: %s", full_path.c_str());
+        return false;
+    }
+
+    stream.close();
+
+    if (!stream.good())
+    {
+        Error("Failed to write save state file: %s", full_path.c_str());
+        return false;
+    }
+
+    Log("Saved state to %s", full_path.c_str());
+    return true;
 }
 
 bool GeargrafxCore::SaveState(u8* buffer, size_t& size, bool screenshot)
@@ -475,6 +529,12 @@ bool GeargrafxCore::SaveState(u8* buffer, size_t& size, bool screenshot)
             return false;
         }
 
+        if (!direct_stream.good())
+        {
+            Error("Failed to save state to buffer: output buffer is too small");
+            return false;
+        }
+
         size = direct_stream.size();
         return true;
     }
@@ -492,6 +552,8 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
 
     Debug("Serializing save state...");
 
+    stream.write(reinterpret_cast<const char*> (&m_master_clock_cycles), sizeof(m_master_clock_cycles));
+
     m_memory->SaveState(stream);
     m_huc6202->SaveState(stream);
     m_huc6260->SaveState(stream);
@@ -506,6 +568,12 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
         m_scsi_controller->SaveState(stream);
         m_cdrom_audio->SaveState(stream);
         m_adpcm->SaveState(stream);
+    }
+
+    if (stream.fail())
+    {
+        Error("Failed to serialize save state");
+        return false;
     }
 
 #if defined(__LIBRETRO__)
@@ -559,7 +627,14 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
     Debug("Save state header screenshot height: %d", header.screenshot_height);
 #endif
 
-    size = static_cast<size_t>(stream.tellp());
+    std::streampos position = stream.tellp();
+    if (position == std::streampos(-1))
+    {
+        Error("Failed to calculate save state size");
+        return false;
+    }
+
+    size = static_cast<size_t>(position);
     size += sizeof(header);
 
 #if !defined(__LIBRETRO__)
@@ -568,6 +643,13 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
 #endif
 
     stream.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+    if (stream.fail())
+    {
+        Error("Failed to write save state header");
+        return false;
+    }
+
     return true;
 }
 
@@ -632,18 +714,39 @@ bool GeargrafxCore::LoadState(std::istream& stream)
         return false;
     }
 
-#if defined(__LIBRETRO__)
-    GG_SaveState_Header_Libretro header;
-#else
-    GG_SaveState_Header header;
+    GG_SaveState_Header_Libretro header = {};
+#if !defined(__LIBRETRO__)
+    bool is_desktop_savestate = false;
 #endif
 
     stream.seekg(0, ios::end);
     size_t size = static_cast<size_t>(stream.tellg());
-    stream.seekg(0, ios::beg);
 
-    stream.seekg(size - sizeof(header), ios::beg);
-    stream.read(reinterpret_cast<char*> (&header), sizeof(header));
+    // Try desktop header first (larger, contains all info)
+    GG_SaveState_Header desktop_header;
+    if (size >= sizeof(desktop_header))
+    {
+        stream.seekg(size - sizeof(desktop_header), ios::beg);
+        stream.read(reinterpret_cast<char*> (&desktop_header), sizeof(desktop_header));
+
+        if (desktop_header.magic == GG_SAVESTATE_MAGIC)
+        {
+            header.magic = desktop_header.magic;
+            header.version = desktop_header.version;
+#if !defined(__LIBRETRO__)
+            is_desktop_savestate = true;
+#endif
+            Debug("Loading desktop save state");
+        }
+    }
+
+    // Fallback to libretro header
+    if ((header.magic != GG_SAVESTATE_MAGIC) && (size >= sizeof(header)))
+    {
+        stream.seekg(size - sizeof(header), ios::beg);
+        stream.read(reinterpret_cast<char*> (&header), sizeof(header));
+    }
+
     stream.seekg(0, ios::beg);
 
     Debug("Load state header magic: 0x%08x", header.magic);
@@ -662,57 +765,59 @@ bool GeargrafxCore::LoadState(std::istream& stream)
     }
 
 #if !defined(__LIBRETRO__)
-    Debug("Load state header size: %d", header.size);
-    Debug("Load state header timestamp: %d", header.timestamp);
-    Debug("Load state header rom name: %s", header.rom_name);
-    Debug("Load state header rom crc: 0x%08x", header.rom_crc);
-    Debug("Load state header screenshot size: %d", header.screenshot_size);
-    Debug("Load state header screenshot width: %d", header.screenshot_width);
-    Debug("Load state header screenshot height: %d", header.screenshot_height);
-    Debug("Load state header screenshot width scale: %d", header.screenshot_width_scale);
-    Debug("Load state header emu build: %s", header.emu_build);
-
-    if ((header.magic != GG_SAVESTATE_MAGIC))
+    if (is_desktop_savestate)
     {
-        Log("Invalid save state: 0x%08x", header.magic);
-        return false;
-    }
+        Debug("Load state header size: %d", desktop_header.size);
+        Debug("Load state header timestamp: %d", desktop_header.timestamp);
+        Debug("Load state header rom name: %s", desktop_header.rom_name);
+        Debug("Load state header rom crc: 0x%08x", desktop_header.rom_crc);
+        Debug("Load state header screenshot size: %d", desktop_header.screenshot_size);
+        Debug("Load state header screenshot width: %d", desktop_header.screenshot_width);
+        Debug("Load state header screenshot height: %d", desktop_header.screenshot_height);
+        Debug("Load state header screenshot width scale: %d", desktop_header.screenshot_width_scale);
+        Debug("Load state header emu build: %s", desktop_header.emu_build);
 
-    if (header.version < GG_SAVESTATE_MIN_VERSION || header.version > GG_SAVESTATE_VERSION)
-    {
-        Error("Invalid save state version: %d", header.version);
-        return false;
-    }
+        if (desktop_header.size != size)
+        {
+            Error("Invalid save state size: %d", desktop_header.size);
+            return false;
+        }
 
-    if (header.size != size)
-    {
-        Error("Invalid save state size: %d", header.size);
-        return false;
-    }
-
-    if (header.rom_crc != m_media->GetCRC())
-    {
-        Error("Invalid save state rom crc: 0x%08x", header.rom_crc);
-        return false;
+        if (desktop_header.rom_crc != m_media->GetCRC())
+        {
+            Error("Invalid save state rom crc: 0x%08x", desktop_header.rom_crc);
+            return false;
+        }
     }
 #endif
 
     Debug("Unserializing save state...");
 
+    if (header.version >= 27)
+        stream.read(reinterpret_cast<char*> (&m_master_clock_cycles), sizeof(m_master_clock_cycles));
+    else
+        m_master_clock_cycles = 0;
+
     m_memory->LoadState(stream);
     m_huc6202->LoadState(stream);
     m_huc6260->LoadState(stream);
-    m_huc6270_1->LoadState(stream);
-    m_huc6270_2->LoadState(stream);
+    m_huc6270_1->LoadState(stream, header.version);
+    m_huc6270_2->LoadState(stream, header.version);
     m_huc6280->LoadState(stream);
     m_audio->LoadState(stream, header.version);
-    m_input->LoadState(stream);
+    m_input->LoadState(stream, header.version);
     if (m_media->IsCDROM())
     {
-        m_cdrom->LoadState(stream);
-        m_scsi_controller->LoadState(stream);
-        m_cdrom_audio->LoadState(stream);
+        m_cdrom->LoadState(stream, header.version);
+        m_scsi_controller->LoadState(stream, header.version);
+        m_cdrom_audio->LoadState(stream, header.version);
         m_adpcm->LoadState(stream, header.version);
+    }
+
+    if (stream.fail())
+    {
+        Error("Failed to unserialize save state");
+        return false;
     }
 
     return true;
@@ -738,6 +843,13 @@ bool GeargrafxCore::GetSaveStateHeader(int index, const char* path, GG_SaveState
     stream.seekg(0, ios::end);
     size_t savestate_size = static_cast<size_t>(stream.tellg());
     stream.seekg(0, ios::beg);
+
+    if (savestate_size < sizeof(GG_SaveState_Header))
+    {
+        Error("Invalid save state file size: %zu", savestate_size);
+        stream.close();
+        return false;
+    }
 
     stream.seekg(savestate_size - sizeof(GG_SaveState_Header), ios::beg);
     stream.read(reinterpret_cast<char*> (header), sizeof(GG_SaveState_Header));
@@ -784,7 +896,13 @@ bool GeargrafxCore::GetSaveStateScreenshot(int index, const char* path, GG_SaveS
     }
 
     GG_SaveState_Header header;
-    GetSaveStateHeader(index, path, &header);
+
+    if (!GetSaveStateHeader(index, path, &header))
+    {
+        Error("Invalid save state header");
+        stream.close();
+        return false;
+    }
 
     if (header.screenshot_size == 0)
     {
@@ -809,6 +927,13 @@ bool GeargrafxCore::GetSaveStateScreenshot(int index, const char* path, GG_SaveS
     Debug("Screenshot width: %d", screenshot->width);
     Debug("Screenshot height: %d", screenshot->height);
     Debug("Screenshot width scale: %d", screenshot->width_scale);
+
+    if (header.size < sizeof(header) + screenshot->size)
+    {
+        Error("Invalid screenshot offset");
+        stream.close();
+        return false;
+    }
 
     stream.seekg(header.size - sizeof(header) - screenshot->size, ios::beg);
     stream.read(reinterpret_cast<char*> (screenshot->data), screenshot->size);

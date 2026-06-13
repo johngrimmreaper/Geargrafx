@@ -28,6 +28,7 @@
 class Adpcm;
 class HuC6280PSG;
 class CdRomAudio;
+class TraceLogger;
 
 class Audio
 {
@@ -37,6 +38,7 @@ public:
     void Init();
     void Reset(bool cdrom);
     void Mute(bool mute);
+    void SetMasterVolume(float volume);
     void SetPSGVolume(float volume);
     void SetADPCMVolume(float volume);
     void SetCDROMVolume(float volume);
@@ -49,10 +51,16 @@ public:
     bool StartVgmRecording(const char* file_path, int clock_rate);
     void StopVgmRecording();
     bool IsVgmRecording() const;
+    void SetTraceLogger(TraceLogger* trace_logger);
+
+private:
+    void ClockSources(u32 cycles);
+    void SampleSources();
 
 private:
     bool m_mute;
     bool m_is_cdrom;
+    TraceLogger* m_trace_logger;
     HuC6280PSG* m_psg;
     Adpcm* m_adpcm;
     CdRomAudio* m_cdrom_audio;
@@ -60,6 +68,8 @@ private:
     s16 m_adpcm_buffer[GG_AUDIO_BUFFER_SIZE] = {};
     s16 m_cdrom_buffer[GG_AUDIO_BUFFER_SIZE] = {};
     u32 m_cycle_counter;
+    u64 m_sample_clock_counter;
+    float m_master_volume;
     float m_psg_volume;
     float m_adpcm_volume;
     float m_cdrom_volume;

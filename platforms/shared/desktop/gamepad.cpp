@@ -21,6 +21,7 @@
 #include "geargrafx.h"
 #include "config.h"
 #include "gui.h"
+#include "gui_actions.h"
 #include "utils.h"
 
 #define GAMEPAD_IMPORT
@@ -82,18 +83,18 @@ void gamepad_load_mappings(void)
         std::string line;
         while (std::getline(file, line))
         {
+            line_number++;
+
             size_t comment = line.find_first_of('#');
             if (comment != std::string::npos)
                 line = line.substr(0, comment);
 
-            line = line.erase(0, line.find_first_not_of(" \t\r\n"));
-            line = line.erase(line.find_last_not_of(" \t\r\n") + 1);
-
-            while (line[0] == ' ')
-                line = line.substr(1);
-
-            if (line.empty())
+            size_t first = line.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos)
                 continue;
+
+            size_t last = line.find_last_not_of(" \t\r\n");
+            line = line.substr(first, last - first + 1);
 
             size_t platform_pos = line.find("platform:Mac OS X");
             if (platform_pos != std::string::npos)
@@ -113,8 +114,6 @@ void gamepad_load_mappings(void)
                 Error("Unable to load game controller mapping in line %d from gamecontrollerdb.txt", line_number);
                 SDL_ERROR("SDL_AddGamepadMapping");
             }
-
-            line_number++;
         }
         file.close();
     }
@@ -363,21 +362,25 @@ void gamepad_check_shortcuts(int controller)
 
         bool button_pressed = gamepad_get_button(sdl_controller, button_mapping);
 
+        if (i == config_HotkeyIndex_Rewind)
+        {
+            if (button_pressed && !gamepad_shortcut_prev[controller][i])
+                gui_action_rewind_pressed();
+            else if (!button_pressed && gamepad_shortcut_prev[controller][i])
+                gui_action_rewind_released();
+
+            gamepad_shortcut_prev[controller][i] = button_pressed;
+            continue;
+        }
+
         if (button_pressed && !gamepad_shortcut_prev[controller][i])
         {
-            if (i >= config_HotkeyIndex_SelectSlot1 && i <= config_HotkeyIndex_SelectSlot5)
+            for (int j = 0; j < GUI_HOTKEY_MAP_COUNT; j++)
             {
-                config_emulator.save_slot = i - config_HotkeyIndex_SelectSlot1;
-            }
-            else
-            {
-                for (int j = 0; j < GUI_HOTKEY_MAP_COUNT; j++)
+                if (gui_hotkey_map[j].config_index == i)
                 {
-                    if (gui_hotkey_map[j].config_index == i)
-                    {
-                        gui_shortcut((gui_ShortCutEvent)gui_hotkey_map[j].shortcut);
-                        break;
-                    }
+                    gui_shortcut(gui_hotkey_map[j].shortcut);
+                    break;
                 }
             }
         }

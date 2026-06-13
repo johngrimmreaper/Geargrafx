@@ -37,6 +37,7 @@ class CdRomMedia;
 class CdRomAudio;
 class Adpcm;
 class ScsiController;
+class TraceLogger;
 
 class GeargrafxCore
 {
@@ -50,14 +51,15 @@ public:
         bool stop_on_irq;
     };
 
-    typedef void (*GG_Debug_Callback)(void);
-
 public:
     GeargrafxCore();
     ~GeargrafxCore();
     void Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_format = GG_PIXEL_RGBA8888);
     bool RunToVBlank(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug = NULL);
     bool LoadMedia(const char* file_path);
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    bool LoadPhysicalCdRom(const char* device_id);
+#endif
     bool LoadHuCardFromBuffer(const u8* buffer, int size, const char* path = NULL);
     bool LoadBios(const char* file_path, bool syscard);
     void ResetMedia(bool preserve_ram);
@@ -95,10 +97,14 @@ public:
     Audio* GetAudio();
     Input* GetInput();
     u64 GetMasterClockCycles();
-    void SetDebugCallback(GG_Debug_Callback callback);
+    TraceLogger* GetTraceLogger();
 
 private:
     void Reset();
+    template<bool is_cdrom, bool is_sgx>
+    bool ClockHardware(u32 cycles);
+    template<bool is_cdrom, bool is_sgx>
+    static void ClockHardwareCallback(void* context, u32 cycles);
     template<bool debugger, bool is_cdrom, bool is_sgx>
     bool RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug);
     bool SaveState(std::ostream& stream, size_t& size, bool screenshot);
@@ -121,8 +127,9 @@ private:
     Adpcm* m_adpcm;
     ScsiController* m_scsi_controller;
     bool m_paused;
-    GG_Debug_Callback m_debug_callback;
+    TraceLogger* m_trace_logger;
     u64 m_master_clock_cycles;
+    bool m_frame_ready;
     GG_MB128_Mode m_mb128_mode;
 };
 

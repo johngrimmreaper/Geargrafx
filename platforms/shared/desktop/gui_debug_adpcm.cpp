@@ -135,7 +135,7 @@ void gui_debug_window_adpcm(void)
 
     ImGui::NewLine(); ImGui::TextColored(cyan, "REGISTERS"); ImGui::Separator();
 
-    u8 status = adpcm->Read(0x0C);
+    u8 status = adpcm->GetStatusRegisterSnapshot();
     ImGui::TextColored(violet, "STATUS " ); ImGui::SameLine();
     ImGui::TextColored(white, "$%02X ", status); ImGui::SameLine(0, 0);
     ImGui::TextColored(gray, "(" BYTE_TO_BINARY_PATTERN_SPACED ")", BYTE_TO_BINARY(status));

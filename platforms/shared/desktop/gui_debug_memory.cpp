@@ -35,6 +35,7 @@ static char set_value_buffer[5] = { };
 
 static void memory_editor_menu(void);
 static void draw_tabs(void);
+static void toggle_memory_breakpoint(int editor, int start, int end);
 
 void gui_debug_memory_init(void)
 {
@@ -49,6 +50,8 @@ void gui_debug_memory_init(void)
         options.uppercase_hex = config_debug.mem_editor_uppercase_hex[i];
         options.gray_out_zeros = config_debug.mem_editor_gray_out_zeros[i];
         mem_edit[i].SetOptions(options);
+
+        mem_edit[i].SetBreakpointCallback(toggle_memory_breakpoint, i);
     }
 }
 
@@ -186,6 +189,11 @@ void gui_debug_memory_save_dump(const char* file_path, bool binary)
         mem_edit[current_mem_edit].SaveToTextFile(file_path);
 }
 
+void gui_debug_memory_load_dump(const char* file_path)
+{
+    mem_edit[current_mem_edit].LoadFromBinaryFile(file_path);
+}
+
 static void draw_tabs(void)
 {
     GeargrafxCore* core = emu_get_core();
@@ -240,6 +248,11 @@ static void memory_editor_menu(void)
         if (ImGui::MenuItem("Save Memory As Binary..."))
         {
             gui_file_dialog_save_memory_dump(true);
+        }
+
+        if (ImGui::MenuItem("Load Memory From Binary..."))
+        {
+            gui_file_dialog_load_memory_dump();
         }
 
         ImGui::EndMenu();
@@ -380,14 +393,18 @@ static void memory_editor_menu(void)
     ImGui::EndMenuBar();
 }
 
-void gui_debug_memory_select_range(int editor, int start_address, int end_address)
+bool gui_debug_memory_select_range(int editor, int start_address, int end_address)
 {
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
-        return;
+        return false;
+
+    if (!mem_edit[editor].SetSelection(start_address, end_address))
+        return false;
 
     mem_edit_select = editor;
-    mem_edit[editor].SetSelection(start_address, end_address);
     mem_edit[editor].ScrollToAddress(start_address);
+
+    return true;
 }
 
 void gui_debug_memory_set_selection_value(int editor, u8 value)
@@ -436,10 +453,10 @@ void gui_debug_memory_remove_bookmark(int editor, int address)
     }
 }
 
-void gui_debug_memory_add_watch(int editor, int address, const char* notes, int size)
+bool gui_debug_memory_add_watch(int editor, int address, const char* notes, int size)
 {
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
-        return;
+        return false;
 
     int size_index = 0;
     switch (size)
@@ -451,7 +468,7 @@ void gui_debug_memory_add_watch(int editor, int address, const char* notes, int 
         default: size_index = 0; break;
     }
 
-    mem_edit[editor].AddWatchDirect(address, notes, size_index);
+    return mem_edit[editor].AddWatchDirect(address, notes, size_index);
 }
 
 void gui_debug_memory_open_watch_popup(int editor, int address, const char* notes)
@@ -560,5 +577,67 @@ void gui_debug_memory_load_settings(std::istream& stream)
     for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
     {
         mem_edit[i].LoadSettings(stream);
+    }
+}
+
+static void toggle_memory_breakpoint(int editor, int start, int end)
+{
+    HuC6280::GG_Breakpoint_Type type;
+
+    switch (editor)
+    {
+    case MEMORY_EDITOR_RAM:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_WRAM;
+        break;
+
+    case MEMORY_EDITOR_ZERO_PAGE:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_ZERO_PAGE;
+        start &= 0xFF;
+        break;
+
+    case MEMORY_EDITOR_ROM:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_ROM;
+        break;
+
+    case MEMORY_EDITOR_CARD_RAM:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_CARD_RAM;
+        break;
+
+    case MEMORY_EDITOR_BACKUP_RAM:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_BACKUP_RAM;
+        break;
+
+    case MEMORY_EDITOR_PALETTES:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM;
+        break;
+
+    case MEMORY_EDITOR_VRAM_1:
+    case MEMORY_EDITOR_VRAM_2:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_VRAM;
+        break;
+
+    case MEMORY_EDITOR_CDROM_RAM:
+        type = HuC6280::HuC6280_BREAKPOINT_TYPE_CDROM_RAM;
+        break;
+
+    default:
+        return;
+    }
+
+    HuC6280* cpu = emu_get_core()->GetHuC6280();
+
+    if (start == end)
+    {
+        if (cpu->IsBreakpoint(type, start))
+            cpu->RemoveBreakpoint(type, start);
+        else
+            cpu->AddBreakpoint(type, start, 0, false, true, false, false);
+    }
+    else
+    {
+        if (cpu->IsBreakpointRange(type, start, end))
+            cpu->RemoveBreakpointRange(type, start, end);
+        else
+            cpu->AddBreakpoint(type, start, end, true, true, false, false);
     }
 }

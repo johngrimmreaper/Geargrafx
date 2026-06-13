@@ -39,6 +39,7 @@ class Memory;
 class Audio;
 class Adpcm;
 class GeargrafxCore;
+class TraceLogger;
 
 class CdRom
 {
@@ -65,8 +66,9 @@ public:
     bool IsFaderEnabled(bool adpcm);
     double GetFaderValue();
     CdRom_State* GetState();
+    void SetTraceLogger(TraceLogger* trace_logger);
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
     void AssertIRQ2();
@@ -75,6 +77,7 @@ private:
 
 private:
     GeargrafxCore* m_core;
+    TraceLogger* m_trace_logger;
     CdRom_State m_state;
     CdRomAudio* m_cdrom_audio;
     ScsiController* m_scsi_controller;

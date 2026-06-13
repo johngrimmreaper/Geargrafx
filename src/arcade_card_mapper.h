@@ -69,6 +69,7 @@ public:
     virtual void Reset();
     virtual void SaveState(std::ostream& stream);
     virtual void LoadState(std::istream& stream);
+    u8 PeekPortData(u8 port);
     u8* GetRAM(void);
     ArcadeCard_State* GetState(void);
 

@@ -27,6 +27,7 @@
 class GeargrafxCore;
 class CdRom;
 class ScsiController;
+class TraceLogger;
 
 class Adpcm
 {
@@ -54,13 +55,16 @@ public:
     void Reset();
     void SoftReset();
     void Clock(u32 cycles);
+    void Sample();
     u8 Read(u16 address);
+    u8 GetStatusRegisterSnapshot();
     void Write(u16 address, u8 value);
     int EndFrame(s16* sample_buffer);
     u8* GetRAM();
     Adpcm_State* GetState();
     void SaveState(std::ostream& stream);
     void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
+    void SetTraceLogger(TraceLogger* trace_logger);
 
 private:
     void ComputeDeltaLUT();
@@ -70,7 +74,6 @@ private:
     u32 NextSlotCycles(bool read);
     void UpdateReadWriteEvents(u32 cycles);
     void UpdateDMA(u32 cycles);
-    void UpdateAudio(u32 cycles);
     void RunAdpcm(u32 cycles);
     void WriteControl(u8 value);
     void SetEndIRQ(bool asserted);
@@ -80,6 +83,7 @@ private:
 
 private:
     GeargrafxCore* m_core;
+    TraceLogger* m_trace_logger;
     CdRom* m_cdrom;
     ScsiController* m_scsi_controller;
     Adpcm_State m_state;
@@ -109,7 +113,6 @@ private:
     s16 m_sample;
     u8 m_step_index;
     s32 m_adpcm_cycle_counter;
-    s32 m_audio_cycle_counter;
     s32 m_buffer_index;
     s32 m_frame_samples;
     s16 m_buffer[GG_AUDIO_BUFFER_SIZE] = {};

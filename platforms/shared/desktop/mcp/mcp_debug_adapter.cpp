@@ -26,7 +26,9 @@
 #include "../gui_debug_disassembler.h"
 #include "../gui_debug_memory.h"
 #include "../gui_debug_memeditor.h"
+#include "../gui_debug_rewind.h"
 #include "../config.h"
+#include "../rewind.h"
 #include <cstring>
 #include <sstream>
 #include <iomanip>
@@ -35,11 +37,62 @@
 #include <thread>
 #include <chrono>
 
+static const int k_mcp_mouse_motion_step = 4;
+
+static bool is_mouse_motion_button(const std::string& button)
+{
+    return button == "up" || button == "down" || button == "left" || button == "right";
+}
+
+static void get_mouse_motion_delta(const std::string& button, int* delta_x, int* delta_y)
+{
+    *delta_x = 0;
+    *delta_y = 0;
+
+    if (button == "up")
+        *delta_y = -k_mcp_mouse_motion_step;
+    else if (button == "down")
+        *delta_y = k_mcp_mouse_motion_step;
+    else if (button == "left")
+        *delta_x = -k_mcp_mouse_motion_step;
+    else if (button == "right")
+        *delta_x = k_mcp_mouse_motion_step;
+}
+
+static std::string get_file_name_from_path(const std::string& path)
+{
+    size_t position = path.find_last_of("/\\");
+
+    if (position == std::string::npos)
+        return path;
+
+    return path.substr(position + 1);
+}
+
 struct DisassemblerBookmark
 {
     u16 address;
     char name[32];
 };
+
+static bool NormalizeMemoryAreaAddress(const MemoryAreaInfo& info, u32 address, u32* offset)
+{
+    if (!IsValidPointer(offset) || !IsValidPointer(info.data) || info.size == 0)
+        return false;
+
+    if (address < info.size)
+    {
+        *offset = address;
+        return true;
+    }
+
+    return false;
+}
+
+static u32 GetMemoryAreaByteSize(const MemoryAreaInfo& info)
+{
+    return info.size * info.unit_size;
+}
 
 void DebugAdapter::Pause()
 {
@@ -111,63 +164,30 @@ json DebugAdapter::GetDebugStatus()
     return result;
 }
 
-void DebugAdapter::SetBreakpoint(u16 address, int type, bool read, bool write, bool execute)
+bool DebugAdapter::SetBreakpoint(u32 address, int type, bool read, bool write, bool execute)
 {
     HuC6280* cpu = m_core->GetHuC6280();
-
-    char buffer[16];
-    snprintf(buffer, sizeof(buffer), "%04X", address);
-
-    if (type == HuC6280::HuC6280_BREAKPOINT_TYPE_ROMRAM && execute && !read && !write)
-    {
-        cpu->AddBreakpoint(address);
-    }
-    else
-    {
-        cpu->AddBreakpoint(type, buffer, read, write, execute);
-    }
+    return cpu->AddBreakpoint(type, address, 0, false, read, write, execute);
 }
 
-void DebugAdapter::SetBreakpointRange(u16 start_address, u16 end_address, int type, bool read, bool write, bool execute)
+bool DebugAdapter::SetBreakpointRange(u32 start_address, u32 end_address, int type, bool read, bool write, bool execute)
 {
     HuC6280* cpu = m_core->GetHuC6280();
-
-    char buffer[16];
-    snprintf(buffer, sizeof(buffer), "%04X-%04X", start_address, end_address);
-
-    cpu->AddBreakpoint(type, buffer, read, write, execute);
+    return cpu->AddBreakpoint(type, start_address, end_address, true, read, write, execute);
 }
 
-void DebugAdapter::ClearBreakpointByAddress(u16 address, int type, u16 end_address)
+bool DebugAdapter::ClearBreakpointByAddress(u32 address, int type, bool range, u32 end_address)
 {
     HuC6280* cpu = m_core->GetHuC6280();
-    std::vector<HuC6280::GG_Breakpoint>* breakpoints = cpu->GetBreakpoints();
-
-    for (int i = (int)breakpoints->size() - 1; i >= 0; i--)
-    {
-        HuC6280::GG_Breakpoint& bp = (*breakpoints)[i];
-
-        if (bp.type != type)
-            continue;
-
-        if (end_address > 0 && end_address >= address)
-        {
-            if (bp.range && bp.address1 == address && bp.address2 == end_address)
-                breakpoints->erase(breakpoints->begin() + i);
-        }
-        else
-        {
-            if (!bp.range && bp.address1 == address)
-                breakpoints->erase(breakpoints->begin() + i);
-        }
-    }
+    return range ? cpu->RemoveBreakpointRange(type, address, end_address)
+        : cpu->RemoveBreakpoint(type, address);
 }
 
 std::vector<BreakpointInfo> DebugAdapter::ListBreakpoints()
 {
     std::vector<BreakpointInfo> result;
     HuC6280* cpu = m_core->GetHuC6280();
-    std::vector<HuC6280::GG_Breakpoint>* breakpoints = cpu->GetBreakpoints();
+    const std::vector<HuC6280::GG_Breakpoint>* breakpoints = cpu->GetBreakpoints();
 
     for (const HuC6280::GG_Breakpoint& brk : *breakpoints)
     {
@@ -262,16 +282,18 @@ std::vector<u8> DebugAdapter::ReadMemoryArea(int area, u32 offset, size_t size)
     std::vector<u8> result;
     MemoryAreaInfo info = GetMemoryAreaInfo(area);
 
-    if (info.data == NULL || offset >= info.size)
+    if (info.data == NULL || info.unit_size == 0 || offset >= info.size)
         return result;
 
+    u32 byte_offset = offset * info.unit_size;
+    u32 byte_size = GetMemoryAreaByteSize(info);
     u32 bytes_to_read = (u32)size;
-    if (offset + bytes_to_read > info.size)
-        bytes_to_read = info.size - offset;
+    if (byte_offset + bytes_to_read > byte_size)
+        bytes_to_read = byte_size - byte_offset;
 
     for (u32 i = 0; i < bytes_to_read; i++)
     {
-        result.push_back(info.data[offset + i]);
+        result.push_back(info.data[byte_offset + i]);
     }
 
     return result;
@@ -281,12 +303,15 @@ void DebugAdapter::WriteMemoryArea(int area, u32 offset, const std::vector<u8>& 
 {
     MemoryAreaInfo info = GetMemoryAreaInfo(area);
 
-    if (info.data == NULL || offset >= info.size)
+    if (info.data == NULL || info.unit_size == 0 || offset >= info.size)
         return;
 
-    for (size_t i = 0; i < data.size() && (offset + i) < info.size; i++)
+    u32 byte_offset = offset * info.unit_size;
+    u32 byte_size = GetMemoryAreaByteSize(info);
+
+    for (size_t i = 0; i < data.size() && (byte_offset + i) < byte_size; i++)
     {
-        info.data[offset + i] = data[i];
+        info.data[byte_offset + i] = data[i];
     }
 }
 
@@ -377,6 +402,8 @@ std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_
 
             result.push_back(line);
 
+            u32 next_addr;
+
             // Move to next instruction
             // Handle wrap-around within the bank when explicit bank is used
             if (use_explicit_bank)
@@ -388,15 +415,17 @@ std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_
                     // Reached end of bank
                     break;
                 }
-                addr = (start_address & 0xE000) | offset_in_bank;
+                next_addr = ((u16)addr & 0xE000) | offset_in_bank;
             }
             else
             {
-                addr = addr + (u32)record->size;
+                next_addr = addr + (u32)record->size;
             }
 
-            if (record->size == 0)
-                addr++;
+            if ((record->size == 0) || (next_addr <= addr))
+                next_addr = addr + 1;
+
+            addr = next_addr;
         }
         else
         {
@@ -412,8 +441,8 @@ const char* DebugAdapter::GetBreakpointTypeName(int type)
 {
     switch (type)
     {
-        case HuC6280::HuC6280_BREAKPOINT_TYPE_ROMRAM:
-            return "ROM/RAM";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS:
+            return "CPU ADDRESS";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_VRAM:
             return "VRAM";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM:
@@ -422,6 +451,18 @@ const char* DebugAdapter::GetBreakpointTypeName(int type)
             return "6270 REG";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER:
             return "6260 REG";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_WRAM:
+            return "WRAM";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_ZERO_PAGE:
+            return "ZERO PAGE";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_ROM:
+            return "ROM";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_CARD_RAM:
+            return "CARD RAM";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_CDROM_RAM:
+            return "CDROM RAM";
+        case HuC6280::HuC6280_BREAKPOINT_TYPE_BACKUP_RAM:
+            return "BACKUP RAM";
         default:
             return "UNKNOWN";
     }
@@ -433,6 +474,7 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
     info.id = area;
     info.data = NULL;
     info.size = 0;
+    info.unit_size = 1;
 
     Memory* memory = m_core->GetMemory();
     Media* media = m_core->GetMedia();
@@ -467,17 +509,19 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
         case MEMORY_EDITOR_BACKUP_RAM:
             info.name = "BRAM";
             info.data = memory->GetBackupRAM();
-            info.size = memory->IsBackupRamEnabled() ? 0x800 : 0;
+            info.size = memory->GetBackupRAMSize();
             break;
         case MEMORY_EDITOR_PALETTES:
             info.name = "PALETTES";
             info.data = (u8*)huc6260->GetColorTable();
             info.size = 512;
+            info.unit_size = sizeof(u16);
             break;
         case MEMORY_EDITOR_VRAM_1:
             info.name = is_sgx ? "VRAM 1" : "VRAM";
             info.data = (u8*)huc6270_1->GetVRAM();
             info.size = HUC6270_VRAM_SIZE;
+            info.unit_size = sizeof(u16);
             break;
         case MEMORY_EDITOR_VRAM_2:
             if (is_sgx)
@@ -485,12 +529,14 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
                 info.name = "VRAM 2";
                 info.data = (u8*)huc6270_2->GetVRAM();
                 info.size = HUC6270_VRAM_SIZE;
+                info.unit_size = sizeof(u16);
             }
             break;
         case MEMORY_EDITOR_SAT_1:
             info.name = is_sgx ? "SAT 1" : "SAT";
             info.data = (u8*)huc6270_1->GetSAT();
             info.size = HUC6270_SAT_SIZE;
+            info.unit_size = sizeof(u16);
             break;
         case MEMORY_EDITOR_SAT_2:
             if (is_sgx)
@@ -498,6 +544,7 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
                 info.name = "SAT 2";
                 info.data = (u8*)huc6270_2->GetSAT();
                 info.size = HUC6270_SAT_SIZE;
+                info.unit_size = sizeof(u16);
             }
             break;
         case MEMORY_EDITOR_CDROM_RAM:
@@ -544,6 +591,8 @@ json DebugAdapter::GetMediaInfo()
     json info;
     Media* media = m_core->GetMedia();
 
+    info["emulator"] = GG_TITLE;
+    info["emulator_version"] = GG_VERSION;
     info["ready"] = media->IsReady();
     info["file_path"] = media->GetFilePath();
     info["file_name"] = media->GetFileName();
@@ -629,6 +678,31 @@ json DebugAdapter::GetMediaInfo()
     info["preload_cdrom"] = media->IsPreloadCdRomEnabled();
 
     return info;
+}
+
+json DebugAdapter::ListRecentMedia()
+{
+    json result;
+    json recent_media = json::array();
+
+    for (int index = 0; index < config_max_recent_roms; index++)
+    {
+        const std::string& path = config_emulator.recent_roms[index];
+
+        if (path.empty())
+            continue;
+
+        json entry;
+        entry["index"] = index;
+        entry["file_path"] = path;
+        entry["file_name"] = get_file_name_from_path(path);
+        recent_media.push_back(entry);
+    }
+
+    result["count"] = recent_media.size();
+    result["recent_media"] = recent_media;
+
+    return result;
 }
 
 json DebugAdapter::GetHuC6280Status()
@@ -1278,7 +1352,7 @@ json DebugAdapter::GetADPCMStatus()
     status["frequency_khz"] = frequency;
 
     // Registers
-    u8 status_reg = adpcm->Read(0x0C);
+    u8 status_reg = adpcm->GetStatusRegisterSnapshot();
     ss << std::setw(2) << (int)status_reg;
     status["status_register"] = ss.str();
     ss.str("");
@@ -1404,6 +1478,40 @@ json DebugAdapter::LoadMedia(const std::string& file_path)
     result["rom_name"] = m_core->GetMedia()->GetFileName();
     result["is_cdrom"] = m_core->GetMedia()->IsCDROM();
     result["is_sgx"] = m_core->GetMedia()->IsSGX();
+
+    config_push_recent_media(file_path);
+
+    return result;
+}
+
+json DebugAdapter::LoadBios(const std::string& file_path, bool syscard)
+{
+    json result;
+
+    if (file_path.empty())
+    {
+        result["error"] = "File path is required";
+        Log("[MCP] LoadBios failed: File path is required");
+        return result;
+    }
+
+    bool success = emu_load_bios(file_path.c_str(), syscard);
+
+    if (!success)
+    {
+        result["error"] = "Failed to load BIOS file";
+        Log("[MCP] LoadBios failed: %s", file_path.c_str());
+        return result;
+    }
+
+    result["success"] = true;
+    result["file_path"] = file_path;
+    result["type"] = syscard ? "syscard" : "gameexpress";
+    result["valid_crc"] = m_core->GetMedia()->IsValidBios(syscard);
+    result["bios_name"] = m_core->GetMedia()->GetBiosName(syscard);
+
+    if (!m_core->GetMedia()->IsValidBios(syscard))
+        result["warning"] = "CRC does not match any known BIOS";
 
     return result;
 }
@@ -1585,6 +1693,7 @@ json DebugAdapter::ControllerButton(int player, const std::string& button, const
         return result;
     }
     GG_Controllers controller = static_cast<GG_Controllers>(player - 1);
+    bool is_mouse = IsMouseController(player);
 
     std::string button_lower = button;
     std::transform(button_lower.begin(), button_lower.end(), button_lower.begin(), ::tolower);
@@ -1605,6 +1714,35 @@ json DebugAdapter::ControllerButton(int player, const std::string& button, const
     else
     {
         result["error"] = "Invalid button name";
+        return result;
+    }
+
+    if (is_mouse && is_mouse_motion_button(button_lower))
+    {
+        if (action == "press_and_release")
+        {
+            int delta_x = 0;
+            int delta_y = 0;
+            get_mouse_motion_delta(button_lower, &delta_x, &delta_y);
+            ApplyMouseMotion(player, delta_x, delta_y);
+            result["mouse_delta_x"] = delta_x;
+            result["mouse_delta_y"] = delta_y;
+        }
+        else
+        {
+            result["__mouse_motion"] = true;
+        }
+
+        result["success"] = true;
+        result["player"] = player;
+        result["button"] = button;
+        result["action"] = action;
+        return result;
+    }
+
+    if (is_mouse && key != GG_KEY_I && key != GG_KEY_II && key != GG_KEY_SELECT && key != GG_KEY_RUN)
+    {
+        result["error"] = "Mouse controller only supports up, down, left, right, select, run, I, and II";
         return result;
     }
 
@@ -1631,6 +1769,26 @@ json DebugAdapter::ControllerButton(int player, const std::string& button, const
     return result;
 }
 
+bool DebugAdapter::IsMouseController(int player) const
+{
+    if (player < 1 || player > 5)
+        return false;
+
+    GG_Controllers controller = static_cast<GG_Controllers>(player - 1);
+    return emu_get_pad_type(controller) == GG_CONTROLLER_MOUSE;
+}
+
+bool DebugAdapter::ApplyMouseMotion(int player, int delta_x, int delta_y)
+{
+    if (!IsMouseController(player))
+        return false;
+
+    if ((delta_x != 0) || (delta_y != 0))
+        emu_set_mouse_delta(delta_x, delta_y);
+
+    return true;
+}
+
 json DebugAdapter::ControllerSetType(int player, const std::string& type)
 {
     json result;
@@ -1651,9 +1809,11 @@ json DebugAdapter::ControllerSetType(int player, const std::string& type)
         controller_type = GG_CONTROLLER_AVENUE_PAD_3;
     else if (type == "avenue_pad_6")
         controller_type = GG_CONTROLLER_AVENUE_PAD_6;
+    else if (type == "mouse")
+        controller_type = GG_CONTROLLER_MOUSE;
     else
     {
-        result["error"] = "Invalid controller type (must be: standard, avenue_pad_3, avenue_pad_6)";
+        result["error"] = "Invalid controller type (must be: standard, avenue_pad_3, avenue_pad_6, mouse)";
         return result;
     }
 
@@ -1703,6 +1863,9 @@ json DebugAdapter::ControllerGetType(int player)
             break;
         case GG_CONTROLLER_AVENUE_PAD_6:
             type_name = "avenue_pad_6";
+            break;
+        case GG_CONTROLLER_MOUSE:
+            type_name = "mouse";
             break;
         default:
             type_name = "unknown";
@@ -1972,12 +2135,48 @@ json DebugAdapter::SelectMemoryRange(int editor, int start_address, int end_addr
         return result;
     }
 
-    gui_debug_memory_select_range(editor, start_address, end_address);
+    MemoryAreaInfo info = GetMemoryAreaInfo(editor);
+    if (!IsValidPointer(info.data) || info.size == 0)
+    {
+        result["error"] = "Memory area unavailable";
+        return result;
+    }
+
+    u32 start_offset = 0;
+    u32 end_offset = 0;
+    if (!NormalizeMemoryAreaAddress(info, (u32)start_address, &start_offset) ||
+        !NormalizeMemoryAreaAddress(info, (u32)end_address, &end_offset))
+    {
+        result["error"] = "Selection range outside memory area";
+        return result;
+    }
+
+    if (start_offset > end_offset)
+        std::swap(start_offset, end_offset);
+
+    if (!gui_debug_memory_select_range(editor, (int)start_offset, (int)end_offset))
+    {
+        result["error"] = "Unable to apply memory selection";
+        return result;
+    }
+
+    int actual_start = -1;
+    int actual_end = -1;
+    gui_debug_memory_get_selection(editor, &actual_start, &actual_end);
+    if (actual_start < 0 || actual_end < actual_start || (u32)actual_end >= info.size)
+    {
+        result["error"] = "Unable to read applied memory selection";
+        return result;
+    }
+
+    std::ostringstream start_ss, end_ss;
+    start_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << (u32)actual_start;
+    end_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << (u32)actual_end;
 
     result["success"] = true;
-    result["editor"] = editor;
-    result["start_address"] = start_address;
-    result["end_address"] = end_address;
+    result["area"] = editor;
+    result["start_address"] = start_ss.str();
+    result["end_address"] = end_ss.str();
 
     return result;
 }
@@ -2074,7 +2273,19 @@ json DebugAdapter::AddMemoryWatch(int editor, int address, const std::string& no
         return result;
     }
 
-    gui_debug_memory_add_watch(editor, address, notes.c_str(), size);
+    MemoryAreaInfo info = GetMemoryAreaInfo(editor);
+    u32 offset = 0;
+    if (!NormalizeMemoryAreaAddress(info, (u32)address, &offset))
+    {
+        result["error"] = "Watch address outside memory area";
+        return result;
+    }
+
+    if (!gui_debug_memory_add_watch(editor, (int)offset, notes.c_str(), size))
+    {
+        result["error"] = "Unable to add memory watch";
+        return result;
+    }
 
     result["success"] = true;
     result["editor"] = editor;
@@ -2459,6 +2670,19 @@ json DebugAdapter::MemorySearch(int area, const std::string& op, const std::stri
         return result;
     }
 
+    if (compare_type_index == 2)
+    {
+        MemoryAreaInfo info = GetMemoryAreaInfo(area);
+        u32 compare_offset = 0;
+        if (!NormalizeMemoryAreaAddress(info, (u32)compare_value, &compare_offset))
+        {
+            result["error"] = "Compare address outside memory area";
+            return result;
+        }
+
+        compare_value = (int)compare_offset;
+    }
+
     int data_type_index = 0;
     if (data_type == "hex") data_type_index = 0;
     else if (data_type == "signed") data_type_index = 1;
@@ -2553,5 +2777,361 @@ json DebugAdapter::MemoryFindBytes(int area, const std::string& hex_bytes)
         result["total_matches"] = count;
     }
 
+    return result;
+}
+
+json DebugAdapter::GetTraceLog(int start, int count)
+{
+    json result;
+
+    TraceLogger* tl = m_core->GetTraceLogger();
+    if (!tl)
+    {
+        result["error"] = "Trace logger not available";
+        return result;
+    }
+
+    u32 total = tl->GetCount();
+
+    if (count < 1) count = 100;
+    if (count > 1000) count = 1000;
+
+    u32 actual_start;
+    if (start < 0)
+        actual_start = (total > (u32)count) ? (total - (u32)count) : 0;
+    else
+        actual_start = (u32)start;
+
+    if (actual_start >= total)
+    {
+        result["total_entries"] = total;
+        result["start"] = actual_start;
+        result["count"] = 0;
+        result["lines"] = json::array();
+        return result;
+    }
+
+    u32 actual_count = (u32)count;
+    if (actual_start + actual_count > total)
+        actual_count = total - actual_start;
+
+    Memory* memory = m_core->GetMemory();
+
+    json lines = json::array();
+    for (u32 i = 0; i < actual_count; i++)
+    {
+        const GG_Trace_Entry& entry = tl->GetEntry(actual_start + i);
+        char buf[256];
+
+        switch (entry.type)
+        {
+            case TRACE_CPU:
+            {
+                GG_Disassembler_Record* record = memory->GetDisassemblerRecord(entry.cpu.pc, entry.cpu.bank);
+                char instr[64] = "???";
+                char bytes[25] = "";
+                if (IsValidPointer(record))
+                {
+                    strncpy(instr, record->name, sizeof(instr) - 1);
+                    instr[sizeof(instr) - 1] = '\0';
+                    char* p = instr;
+                    while (*p)
+                    {
+                        if (*p == '{')
+                        {
+                            char* end = strchr(p, '}');
+                            if (end)
+                                memmove(p, end + 1, strlen(end + 1) + 1);
+                            else
+                                break;
+                        }
+                        else
+                            p++;
+                    }
+                    strncpy(bytes, record->bytes, sizeof(bytes) - 1);
+                    bytes[sizeof(bytes) - 1] = '\0';
+                }
+                u8 p = entry.cpu.p;
+                snprintf(buf, sizeof(buf), "%02X:%04X  A:%02X X:%02X Y:%02X S:%02X  %c%c%c%c%c%c%c%c  %-26s %s",
+                         entry.cpu.bank, entry.cpu.pc, entry.cpu.a, entry.cpu.x, entry.cpu.y, entry.cpu.s,
+                         (p & FLAG_NEGATIVE) ? 'N' : 'n', (p & FLAG_OVERFLOW) ? 'V' : 'v',
+                         (p & FLAG_TRANSFER) ? 'T' : 't', (p & FLAG_BREAK) ? 'B' : 'b',
+                         (p & FLAG_DECIMAL) ? 'D' : 'd', (p & FLAG_INTERRUPT) ? 'I' : 'i',
+                         (p & FLAG_ZERO) ? 'Z' : 'z', (p & FLAG_CARRY) ? 'C' : 'c',
+                         instr, bytes);
+                break;
+            }
+            case TRACE_CPU_IRQ:
+            {
+                const char* irq_name = "???";
+                if (entry.irq.vector == 0xFFFA) irq_name = "TIQ";
+                else if (entry.irq.vector == 0xFFF8) irq_name = "IRQ1";
+                else if (entry.irq.vector == 0xFFF6) irq_name = "IRQ2";
+                snprintf(buf, sizeof(buf), "  [CPU]  IRQ       %s  PC:$%04X  Vector:$%04X  Mask:%02X",
+                         irq_name, entry.irq.pc, entry.irq.vector, entry.irq.irq_mask);
+                break;
+            }
+            case TRACE_VDC:
+            {
+                static const char* k_vdc_reg_names[] = {
+                    "MAWR", "MARR", "VWR", "???", "???", "CR", "RCR", "BXR",
+                    "BYR", "MWR", "HSR", "HDR", "VSR", "VDR", "VCR", "DCR",
+                    "SOUR", "DESR", "LENR", "DVSSR"
+                };
+                const char* chip_name = entry.vdc.chip == 0 ? "VDC1" : "VDC2";
+                switch (entry.vdc.event)
+                {
+                    case TRACE_VDC_REG_WRITE:
+                    {
+                        const char* reg_name = entry.vdc.reg < 20 ? k_vdc_reg_names[entry.vdc.reg] : "???";
+                        snprintf(buf, sizeof(buf), "  [%s]  REG       %s($%02X)=$%04X",
+                                 chip_name, reg_name, entry.vdc.reg, entry.vdc.value);
+                        break;
+                    }
+                    case TRACE_VDC_VBLANK_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  VBLANK    IRQ", chip_name);
+                        break;
+                    case TRACE_VDC_SCANLINE_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  SCANLINE  IRQ  RCR=%d", chip_name, entry.vdc.value);
+                        break;
+                    case TRACE_VDC_OVERFLOW_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  OVERFLOW  IRQ", chip_name);
+                        break;
+                    case TRACE_VDC_SPRITE_COLLISION_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  SPRITE    COLLISION IRQ", chip_name);
+                        break;
+                    case TRACE_VDC_SATB_DMA_END_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  SATB DMA  END IRQ", chip_name);
+                        break;
+                    case TRACE_VDC_VRAM_DMA_END_IRQ:
+                        snprintf(buf, sizeof(buf), "  [%s]  VRAM DMA  END IRQ", chip_name);
+                        break;
+                    case TRACE_VDC_VRAM_DMA_START:
+                        snprintf(buf, sizeof(buf), "  [%s]  VRAM DMA  START", chip_name);
+                        break;
+                    case TRACE_VDC_SATB_DMA_START:
+                        snprintf(buf, sizeof(buf), "  [%s]  SATB DMA  START  DVSSR=$%04X", chip_name, entry.vdc.value);
+                        break;
+                    default:
+                        snprintf(buf, sizeof(buf), "  [%s]  ???", chip_name);
+                        break;
+                }
+                break;
+            }
+            case TRACE_INPUT:
+                snprintf(buf, sizeof(buf), "  [INPUT] PORT %d  Data:$%02X",
+                         entry.input.port, entry.input.value);
+                break;
+            case TRACE_TIMER:
+                snprintf(buf, sizeof(buf), "  [TIMER] IRQ     Counter:%02X  Reload:%02X",
+                         entry.timer.counter, entry.timer.reload);
+                break;
+            case TRACE_CDROM:
+            {
+                switch (entry.cdrom.event)
+                {
+                    case TRACE_CDROM_IRQ:
+                        snprintf(buf, sizeof(buf), "  [CDROM] IRQ     Type:%02X  Active:%02X  Enabled:%02X",
+                                 entry.cdrom.irq_type, entry.cdrom.active, entry.cdrom.enabled);
+                        break;
+                    case TRACE_CDROM_FADER:
+                    {
+                        u8 v = entry.cdrom.irq_type;
+                        snprintf(buf, sizeof(buf), "  [CDROM] FADER    %s  %s  %s",
+                                 IS_SET_BIT(v, 3) ? "ON" : "OFF",
+                                 IS_SET_BIT(v, 1) ? "ADPCM" : "CD",
+                                 IS_SET_BIT(v, 2) ? "FAST" : "SLOW");
+                        break;
+                    }
+                    case TRACE_CDROM_RESET:
+                        snprintf(buf, sizeof(buf), "  [CDROM] RESET    $%02X", entry.cdrom.irq_type);
+                        break;
+                    default:
+                        snprintf(buf, sizeof(buf), "  [CDROM] ???");
+                        break;
+                }
+                break;
+            }
+            case TRACE_PSG:
+                snprintf(buf, sizeof(buf), "  [PSG]   CH %d    Reg:$%02X=$%02X",
+                         entry.psg.channel, entry.psg.reg, entry.psg.value);
+                break;
+            case TRACE_ADPCM:
+                snprintf(buf, sizeof(buf), "  [ADPCM] REG     $%02X=$%02X",
+                         entry.adpcm.reg, entry.adpcm.value);
+                break;
+            case TRACE_VCE:
+            {
+                switch (entry.vce.event)
+                {
+                    case TRACE_VCE_CONTROL_WRITE:
+                    {
+                        static const char* k_speed_names[] = { "5.36MHz", "7.16MHz", "10.8MHz", "10.8MHz" };
+                        u8 speed = entry.vce.value & 0x03;
+                        snprintf(buf, sizeof(buf), "  [VCE]  CONTROL   Speed:%s  Blur:%d  B&W:%d",
+                                 k_speed_names[speed],
+                                 (entry.vce.value >> 2) & 1,
+                                 (entry.vce.value >> 7) & 1);
+                        break;
+                    }
+                    case TRACE_VCE_COLOR_WRITE:
+                        snprintf(buf, sizeof(buf), "  [VCE]  COLOR     Addr:$%03X=$%03X",
+                                 entry.vce.reg, entry.vce.value & 0x1FF);
+                        break;
+                    case TRACE_VCE_VSYNC_START:
+                        snprintf(buf, sizeof(buf), "  [VCE]  VSYNC     START  Line:%d", entry.vce.value);
+                        break;
+                    case TRACE_VCE_VSYNC_END:
+                        snprintf(buf, sizeof(buf), "  [VCE]  VSYNC     END    Line:%d", entry.vce.value);
+                        break;
+                    default:
+                        snprintf(buf, sizeof(buf), "  [VCE]  ???");
+                        break;
+                }
+                break;
+            }
+            case TRACE_SCSI:
+            {
+                static const char* k_scsi_cmd_names[] = {
+                    "TEST_UNIT_READY", NULL, NULL, "REQUEST_SENSE",
+                    NULL, NULL, NULL, NULL, "READ"
+                };
+                switch (entry.scsi.event)
+                {
+                    case TRACE_SCSI_COMMAND:
+                    {
+                        const char* cmd_name = NULL;
+                        if (entry.scsi.command < 9)
+                            cmd_name = k_scsi_cmd_names[entry.scsi.command];
+                        else if (entry.scsi.command == 0xD8) cmd_name = "AUDIO_START";
+                        else if (entry.scsi.command == 0xD9) cmd_name = "AUDIO_STOP";
+                        else if (entry.scsi.command == 0xDA) cmd_name = "AUDIO_PAUSE";
+                        else if (entry.scsi.command == 0xDD) cmd_name = "READ_SUBCODE_Q";
+                        else if (entry.scsi.command == 0xDE) cmd_name = "READ_TOC";
+                        if (cmd_name)
+                        {
+                            if (entry.scsi.command == 0x08)
+                                snprintf(buf, sizeof(buf), "  [SCSI] CMD      %s  LBA:%u", cmd_name, entry.scsi.param);
+                            else
+                                snprintf(buf, sizeof(buf), "  [SCSI] CMD      %s", cmd_name);
+                        }
+                        else
+                            snprintf(buf, sizeof(buf), "  [SCSI] CMD      $%02X", entry.scsi.command);
+                        break;
+                    }
+                    default:
+                        snprintf(buf, sizeof(buf), "  [SCSI] ???");
+                        break;
+                }
+                break;
+            }
+            default:
+                snprintf(buf, sizeof(buf), "  [???]");
+                break;
+        }
+
+        lines.push_back(buf);
+    }
+
+    result["total_entries"] = total;
+    result["start"] = actual_start;
+    result["count"] = actual_count;
+    result["lines"] = lines;
+    return result;
+}
+
+json DebugAdapter::SetTraceLog(bool enabled, u32 flags)
+{
+    json result;
+
+    TraceLogger* tl = m_core->GetTraceLogger();
+    if (!tl)
+    {
+        result["error"] = "Trace logger not available";
+        return result;
+    }
+
+    if (enabled)
+    {
+        if (flags == 0)
+            flags = TRACE_FLAG_CPU;
+
+        tl->SetEnabledFlags(flags);
+
+        result["status"] = "started";
+        result["enabled_flags"] = flags;
+
+        json enabled_list = json::array();
+        if (flags & TRACE_FLAG_CPU) enabled_list.push_back("cpu");
+        if (flags & TRACE_FLAG_CPU_IRQ) enabled_list.push_back("cpu_irq");
+        if (flags & TRACE_FLAG_VDC) enabled_list.push_back("vdc");
+        if (flags & TRACE_FLAG_INPUT) enabled_list.push_back("input");
+        if (flags & TRACE_FLAG_TIMER) enabled_list.push_back("timer");
+        if (flags & TRACE_FLAG_CDROM) enabled_list.push_back("cdrom");
+        if (flags & TRACE_FLAG_PSG) enabled_list.push_back("psg");
+        if (flags & TRACE_FLAG_ADPCM) enabled_list.push_back("adpcm");
+        if (flags & TRACE_FLAG_VCE) enabled_list.push_back("vce");
+        if (flags & TRACE_FLAG_SCSI) enabled_list.push_back("scsi");
+        result["enabled"] = enabled_list;
+    }
+    else
+    {
+        tl->SetEnabledFlags(0);
+        result["status"] = "stopped";
+    }
+
+    result["total_entries"] = tl->GetCount();
+    return result;
+}
+
+json DebugAdapter::GetRewindStatus()
+{
+    json result;
+    result["enabled"] = config_rewind.enabled;
+    result["snapshot_count"] = rewind_get_snapshot_count();
+    result["capacity"] = rewind_get_capacity();
+    result["frames_per_snapshot"] = rewind_get_frames_per_snapshot();
+    result["buffer_seconds"] = config_rewind.buffer_seconds;
+
+    int fps = rewind_get_frames_per_snapshot();
+    if (fps < 1) fps = 1;
+    result["buffered_seconds"] = (double)(rewind_get_snapshot_count() * fps) / 60.0;
+
+    return result;
+}
+
+json DebugAdapter::RewindSeek(int snapshot)
+{
+    bool paused = emu_is_paused() || emu_is_debug_idle();
+
+    if (!paused)
+        return {{"error", "Pause the emulator before seeking the rewind buffer"}};
+
+    int count = rewind_get_snapshot_count();
+
+    if (count == 0)
+        return {{"error", "No rewind snapshots available"}};
+
+    if (snapshot < 1 || snapshot > count)
+        return {{"error", "Snapshot out of range (1-" + std::to_string(count) + ")"}};
+
+    int age = count - snapshot;
+
+    if (!gui_debug_rewind_seek(age))
+        return {{"error", "Failed to load snapshot"}};
+
+    HuC6280::HuC6280_State* cpu = m_core->GetHuC6280()->GetState();
+    std::ostringstream ss;
+    ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << cpu->PC->GetValue();
+
+    int fps = rewind_get_frames_per_snapshot();
+    if (fps < 1) fps = 1;
+
+    json result;
+    result["success"] = true;
+    result["snapshot"] = snapshot;
+    result["total"] = count;
+    result["age_seconds"] = (double)(age * fps) / 60.0;
+    result["pc"] = ss.str();
     return result;
 }

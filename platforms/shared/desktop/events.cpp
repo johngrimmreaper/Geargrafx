@@ -21,6 +21,7 @@
 #include "geargrafx.h"
 #include "config.h"
 #include "gui.h"
+#include "gui_actions.h"
 #include "emu.h"
 #include "application.h"
 #include "gamepad.h"
@@ -33,13 +34,30 @@ static Uint16 input_last_state[GG_MAX_GAMEPADS] = { };
 static bool input_turbo_toggle_prev[GG_MAX_GAMEPADS][2] = { };
 
 static bool events_check_hotkey(const SDL_Event* event, const config_Hotkey& hotkey, bool allow_repeat);
-static Uint16 input_build_state(int controller);
+static bool events_match_hotkey_scancode(const SDL_Event* event, const config_Hotkey& hotkey);
+static bool events_is_mouse_controller(int controller);
+static int events_get_mouse_controller(void);
+static Uint16 input_build_state(int controller, bool update_turbo = true);
+static Uint16 input_filter_opposing_directions(int controller, Uint16 state);
 static void input_apply_state(int controller, Uint16 before, Uint16 now);
 
 void events_shortcuts(const SDL_Event* event)
 {
+    if (event->type == SDL_EVENT_KEY_UP)
+    {
+        if (events_match_hotkey_scancode(event, config_hotkeys[config_HotkeyIndex_Rewind]))
+            gui_action_rewind_released();
+        return;
+    }
+
     if (event->type != SDL_EVENT_KEY_DOWN)
         return;
+
+    if (events_check_hotkey(event, config_hotkeys[config_HotkeyIndex_Rewind], false))
+    {
+        gui_action_rewind_pressed();
+        return;
+    }
 
     // Check special case hotkeys first
     if (events_check_hotkey(event, config_hotkeys[config_HotkeyIndex_Quit], false))
@@ -48,29 +66,12 @@ void events_shortcuts(const SDL_Event* event)
         return;
     }
 
-    if (events_check_hotkey(event, config_hotkeys[config_HotkeyIndex_Fullscreen], false))
-    {
-        config_emulator.fullscreen = !config_emulator.fullscreen;
-        application_trigger_fullscreen(config_emulator.fullscreen);
-        return;
-    }
-
-    // Check slot selection hotkeys
-    for (int i = 0; i < 5; i++)
-    {
-        if (events_check_hotkey(event, config_hotkeys[config_HotkeyIndex_SelectSlot1 + i], false))
-        {
-            config_emulator.save_slot = i;
-            return;
-        }
-    }
-
     // Check all hotkeys mapped to gui shortcuts
     for (int i = 0; i < GUI_HOTKEY_MAP_COUNT; i++)
     {
-        if (gui_hotkey_map[i].shortcut >= 0 && events_check_hotkey(event, config_hotkeys[gui_hotkey_map[i].config_index], gui_hotkey_map[i].allow_repeat))
+        if (events_check_hotkey(event, config_hotkeys[gui_hotkey_map[i].config_index], gui_hotkey_map[i].allow_repeat))
         {
-            gui_shortcut((gui_ShortCutEvent)gui_hotkey_map[i].shortcut);
+            gui_shortcut(gui_hotkey_map[i].shortcut);
             return;
         }
     }
@@ -108,6 +109,73 @@ void events_shortcuts(const SDL_Event* event)
     }
 }
 
+void events_handle_emu_event(const SDL_Event* event)
+{
+    if (gui_in_use)
+        return;
+
+    int mouse_controller = events_get_mouse_controller();
+
+    if (mouse_controller < 0)
+        return;
+
+    switch (event->type)
+    {
+        case SDL_EVENT_MOUSE_MOTION:
+        {
+            if (event->motion.xrel != 0.0f || event->motion.yrel != 0.0f)
+            {
+                int sen = MAX(config_emulator.mouse_sensitivity, 1);
+
+                int relx = (int)(event->motion.xrel * ((float)sen / 6.0f));
+                int rely = (int)(event->motion.yrel * ((float)sen / 6.0f));
+                emu_set_mouse_delta(relx, rely);
+            }
+            break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        {
+            if (gui_main_window_hovered)
+            {
+                if (event->button.button == SDL_BUTTON_RIGHT)
+                    emu_key_pressed((GG_Controllers)mouse_controller, GG_KEY_I);
+                if (event->button.button == SDL_BUTTON_LEFT)
+                    emu_key_pressed((GG_Controllers)mouse_controller, GG_KEY_II);
+            }
+            break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        {
+            if (event->button.button == SDL_BUTTON_RIGHT)
+                emu_key_released((GG_Controllers)mouse_controller, GG_KEY_I);
+            if (event->button.button == SDL_BUTTON_LEFT)
+                emu_key_released((GG_Controllers)mouse_controller, GG_KEY_II);
+            break;
+        }
+    }
+}
+
+static int events_get_mouse_controller(void)
+{
+    int max_controller = config_input.turbo_tap ? GG_MAX_GAMEPADS : 1;
+
+    for (int i = 0; i < max_controller; i++)
+    {
+        if (events_is_mouse_controller(i))
+            return i;
+    }
+
+    return -1;
+}
+
+static bool events_is_mouse_controller(int controller)
+{
+    if (controller < 0 || controller >= GG_MAX_GAMEPADS)
+        return false;
+
+    return config_input.controller_type[controller] == GG_CONTROLLER_MOUSE;
+}
+
 void events_emu(void)
 {
     if (input_updated || gui_in_use)
@@ -120,7 +188,7 @@ void events_emu(void)
 
     for (int controller = 0; controller < max_controller; controller++)
     {
-        Uint16 now = input_build_state(controller);
+        Uint16 now = input_filter_opposing_directions(controller, input_build_state(controller));
         Uint16 before = input_last_state[controller];
 
         if (now != before)
@@ -129,6 +197,23 @@ void events_emu(void)
         input_last_state[controller] = now;
 
         gamepad_check_shortcuts(controller);
+    }
+}
+
+void events_sync_input(void)
+{
+    SDL_PumpEvents();
+
+    int max_controller = config_input.turbo_tap ? GG_MAX_GAMEPADS : 1;
+    static const Uint16 all_keys = GG_KEY_LEFT | GG_KEY_RIGHT | GG_KEY_UP | GG_KEY_DOWN |
+        GG_KEY_I | GG_KEY_II | GG_KEY_III | GG_KEY_IV | GG_KEY_V | GG_KEY_VI | GG_KEY_RUN | GG_KEY_SELECT;
+
+    for (int controller = 0; controller < GG_MAX_GAMEPADS; controller++)
+    {
+        Uint16 now = (controller < max_controller) ? input_filter_opposing_directions(controller, input_build_state(controller, false)) : 0;
+        input_apply_state(controller, all_keys, 0);
+        input_apply_state(controller, 0, now);
+        input_last_state[controller] = now;
     }
 }
 
@@ -142,8 +227,11 @@ bool events_input_updated(void)
     return input_updated;
 }
 
-static Uint16 input_build_state(int controller)
+static Uint16 input_build_state(int controller, bool update_turbo)
 {
+    const bool is_mouse_controller = events_is_mouse_controller(controller);
+    const Uint16 mouse_button_mask = GG_KEY_I | GG_KEY_II | GG_KEY_RUN | GG_KEY_SELECT;
+
     SDL_Keymod mods = SDL_GetModState();
     if (mods & (SDL_KMOD_CTRL | SDL_KMOD_SHIFT | SDL_KMOD_ALT | SDL_KMOD_GUI))
         return 0;
@@ -239,24 +327,63 @@ static Uint16 input_build_state(int controller)
         }
     }
 
+    if (is_mouse_controller)
+    {
+        if (update_turbo)
+        {
+            input_turbo_toggle_prev[controller][0] = false;
+            input_turbo_toggle_prev[controller][1] = false;
+        }
+        return ret & mouse_button_mask;
+    }
+
     bool pressed_turbo_I  = kb_turbo_I || gp_turbo_I;
     bool pressed_turbo_II = kb_turbo_II || gp_turbo_II;
 
-    if (pressed_turbo_I && !input_turbo_toggle_prev[controller][0])
+    if (update_turbo && pressed_turbo_I && !input_turbo_toggle_prev[controller][0])
     {
         config_input.turbo_enabled[controller][0] = !config_input.turbo_enabled[controller][0];
         emu_set_turbo((GG_Controllers)controller, GG_KEY_I, config_input.turbo_enabled[controller][0]);
     }
-    if (pressed_turbo_II && !input_turbo_toggle_prev[controller][1])
+    if (update_turbo && pressed_turbo_II && !input_turbo_toggle_prev[controller][1])
     {
         config_input.turbo_enabled[controller][1] = !config_input.turbo_enabled[controller][1];
         emu_set_turbo((GG_Controllers)controller, GG_KEY_II, config_input.turbo_enabled[controller][1]);
     }
 
-    input_turbo_toggle_prev[controller][0] = pressed_turbo_I;
-    input_turbo_toggle_prev[controller][1] = pressed_turbo_II;
+    if (update_turbo)
+    {
+        input_turbo_toggle_prev[controller][0] = pressed_turbo_I;
+        input_turbo_toggle_prev[controller][1] = pressed_turbo_II;
+    }
 
     return ret;
+}
+
+static Uint16 input_filter_opposing_directions(int controller, Uint16 state)
+{
+    if (config_input.allow_up_down)
+        return state;
+
+    Uint16 previous = input_last_state[controller];
+
+    if ((state & GG_KEY_UP) && (state & GG_KEY_DOWN))
+    {
+        if (!(previous & GG_KEY_UP))
+            state = (Uint16)(state & ~GG_KEY_UP);
+        if (!(previous & GG_KEY_DOWN))
+            state = (Uint16)(state & ~GG_KEY_DOWN);
+    }
+
+    if ((state & GG_KEY_LEFT) && (state & GG_KEY_RIGHT))
+    {
+        if (!(previous & GG_KEY_LEFT))
+            state = (Uint16)(state & ~GG_KEY_LEFT);
+        if (!(previous & GG_KEY_RIGHT))
+            state = (Uint16)(state & ~GG_KEY_RIGHT);
+    }
+
+    return state;
 }
 
 static void input_apply_state(int controller, Uint16 before, Uint16 now)
@@ -308,4 +435,13 @@ static bool events_check_hotkey(const SDL_Event* event, const config_Hotkey& hot
     if (expected & (SDL_KMOD_LGUI | SDL_KMOD_RGUI | SDL_KMOD_GUI)) expected_normalized = (SDL_Keymod)(expected_normalized | SDL_KMOD_GUI);
 
     return mods_normalized == expected_normalized;
+}
+
+static bool events_match_hotkey_scancode(const SDL_Event* event, const config_Hotkey& hotkey)
+{
+    if (event->type != SDL_EVENT_KEY_UP && event->type != SDL_EVENT_KEY_DOWN)
+        return false;
+    if (hotkey.key == SDL_SCANCODE_UNKNOWN)
+        return false;
+    return event->key.scancode == hotkey.key;
 }

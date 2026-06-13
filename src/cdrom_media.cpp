@@ -20,16 +20,25 @@
 #include "cdrom_media.h"
 #include "cdrom_cuebin_image.h"
 #include "cdrom_chd_image.h"
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+#include "cdrom_physical_image.h"
+#endif
 
 CdRomMedia::CdRomMedia()
 {
     InitPointer(m_current_image);
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    InitPointer(m_physical_image);
+#endif
 }
 
 CdRomMedia::~CdRomMedia()
 {
     SafeDelete(m_cue_bin_image);
     SafeDelete(m_chd_image);
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    SafeDelete(m_physical_image);
+#endif
 }
 
 void CdRomMedia::Init()
@@ -40,6 +49,11 @@ void CdRomMedia::Init()
     m_chd_image = new CdRomChdImage();
     m_chd_image->Init();
 
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    m_physical_image = new CdRomPhysicalImage();
+    m_physical_image->Init();
+#endif
+
     Reset();
 }
 
@@ -49,10 +63,19 @@ void CdRomMedia::Reset()
 
     m_cue_bin_image->Reset();
     m_chd_image->Reset();
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+    m_physical_image->Reset();
+#endif
 }
 
 bool CdRomMedia::LoadCueFromFile(const char* path, bool preload)
 {
+    bool cdrom_uri_path = IsCdRomUriPath(path);
+    GG_CdRomCueBinLoadOptions options = cdrom_uri_path ?
+        GG_CdRomCueBinStreamingLoadOptions() : GG_CdRomCueBinDefaultLoadOptions();
+
+    m_cue_bin_image->SetLoadOptions(options);
+
     if (m_cue_bin_image->LoadFromFile(path, preload))
     {
         m_current_image = m_cue_bin_image;
@@ -80,6 +103,28 @@ bool CdRomMedia::LoadChdFromFile(const char* path, bool preload)
         return false;
     }
 }
+
+#if defined(GG_ENABLE_PHYSICAL_CDROM)
+bool CdRomMedia::LoadPhysicalDrive(const char* device_id, bool preload)
+{
+    if (m_physical_image->LoadFromDevice(device_id, preload))
+    {
+        m_current_image = m_physical_image;
+        return true;
+    }
+    else
+    {
+        Error("Failed to load physical CD-ROM from %s", device_id);
+        Reset();
+        return false;
+    }
+}
+
+bool CdRomMedia::HasPhysicalDriveError()
+{
+    return IsValidPointer(m_physical_image) && m_physical_image->HasDiscError();
+}
+#endif
 
 bool CdRomMedia::ReadSector(u32 lba, u8* buffer)
 {
@@ -157,6 +202,11 @@ s32 CdRomMedia::GetTrackFromLBA(u32 lba)
         Error("GetTrackFromLBA failed - Current image is NULL");
         return -1;
     }
+}
+
+bool CdRomMedia::IsCdRomUriPath(const char* path)
+{
+    return IsValidPointer(path) && (strncmp(path, "cdrom://", 8) == 0);
 }
 
 ///////////////////////////////////////////////////////////////
