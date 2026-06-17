@@ -1,0 +1,24 @@
+Description: Use portable large-file stdio calls in bundled libchdr
+ On glibc armhf with _FILE_OFFSET_BITS=64, fseeko() and ftello() are the
+ portable large-file interfaces. The fseeko64() and ftello64() names are not
+ declared in this build environment, causing GCC to fail with
+ -Werror=implicit-function-declaration.
+Author: Reaper <JohnGrimmReaper@disroot.org>
+Forwarded: not-needed
+Last-Update: 2026-06-17
+
+Index: geargrafx/platforms/shared/dependencies/libchdr/src/libchdr_chd.c
+===================================================================
+--- geargrafx.orig/platforms/shared/dependencies/libchdr/src/libchdr_chd.c
++++ geargrafx/platforms/shared/dependencies/libchdr/src/libchdr_chd.c
+@@ -3485,8 +3485,8 @@ static uint64_t core_stdio_fsize(core_fi
+ 	#define core_stdio_fseek_impl _fseeki64
+ 	#define core_stdio_ftell_impl _ftelli64
+ #elif defined(_LARGEFILE_SOURCE) && defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64
+-	#define core_stdio_fseek_impl fseeko64
+-	#define core_stdio_ftell_impl ftello64
++	#define core_stdio_fseek_impl fseeko
++	#define core_stdio_ftell_impl ftello
+ #elif defined(__PS3__) && !defined(__PSL1GHT__) || defined(__SWITCH__) || defined(__vita__)
+ 	#define core_stdio_fseek_impl(x,y,z) fseek(x,(off_t)y,z)
+ 	#define core_stdio_ftell_impl(x) (off_t)ftell(x)
