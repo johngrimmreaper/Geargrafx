@@ -1,12 +1,16 @@
-geargrafx (1.7.10-1~linux1) UNRELEASED; urgency=medium
+geargrafx (1.7.10-1~ppa2~linux1) UNRELEASED; urgency=medium
 
+  [ Nacho Sanchez ]
   * Merge upstream Geargrafx 1.7.10.
   * Install the game executable under /usr/games.
   * Depend on sdl-gamecontrollerdb instead of shipping a private
     gamecontrollerdb.txt copy.
   * Enable i386, amd64, armhf, and arm64 package builds.
 
- -- Nacho Sanchez <863613+drhelius@users.noreply.github.com>  Sat, 13 Jun 2026 23:15:29 +0000
+  [ Reaper ]
+  * Fix bundled libchdr large-file build on armhf.
+
+ -- Nacho Sanchez <863613+drhelius@users.noreply.github.com>  Wed, 17 Jun 2026 23:15:56 +0000
 
 geargrafx (1.7.2-1~linux1) UNRELEASED; urgency=medium
 
