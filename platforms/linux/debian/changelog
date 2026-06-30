@@ -1,4 +1,4 @@
-geargrafx (1.7.10-1~ppa2~linux1) UNRELEASED; urgency=medium
+geargrafx (1.7.14-1~ppa1) UNRELEASED; urgency=medium
 
   [ Nacho Sanchez ]
   * Merge upstream Geargrafx 1.7.10.
@@ -9,14 +9,18 @@ geargrafx (1.7.10-1~ppa2~linux1) UNRELEASED; urgency=medium
 
   [ Reaper ]
   * Fix bundled libchdr large-file build on armhf.
+  * Merge upstream Geargrafx 1.7.14.
+  * Refresh packaging from the previous 1.7.10 package.
+  * Preserve existing architecture policy and armhf large-file build
+    fix.
 
- -- Nacho Sanchez <863613+drhelius@users.noreply.github.com>  Wed, 17 Jun 2026 23:15:56 +0000
+ -- Reaper <JohnGrimmReaper@disroot.org>  Tue, 30 Jun 2026 00:46:52 +0000
 
 geargrafx (1.7.2-1~linux1) UNRELEASED; urgency=medium
 
-  * Initial PPA build for Ubuntu 24.04 Noble.
+  * Initial package build.
   * Add Debian packaging for Geargrafx 1.7.2.
-  * Build against libsdl3-dev from the PPA repository ppa:johngrimmreaper/24.04 .
+  * Build against libsdl3-dev.
   * Install the binary under /usr/games.
   * Add a desktop entry and application icon.
   * Add a minimal manual page.
