@@ -18,6 +18,7 @@
  */
 
 #include "mcp_debug_adapter.h"
+#include "input.h"
 #include "log.h"
 #include "../utils.h"
 #include "../emu.h"
@@ -28,6 +29,7 @@
 #include "../gui_debug_memeditor.h"
 #include "../gui_debug_rewind.h"
 #include "../config.h"
+#include "../events.h"
 #include "../rewind.h"
 #include <cstring>
 #include <sstream>
@@ -286,8 +288,9 @@ std::vector<u8> DebugAdapter::ReadMemoryArea(int area, u32 offset, size_t size)
     u32 byte_offset = offset * info.unit_size;
     u32 byte_size = GetMemoryAreaByteSize(info);
     u32 bytes_to_read = (u32)size;
-    if (byte_offset + bytes_to_read > byte_size)
-        bytes_to_read = byte_size - byte_offset;
+    u32 bytes_remaining = byte_size - byte_offset;
+    if (size > bytes_remaining)
+        bytes_to_read = bytes_remaining;
 
     for (u32 i = 0; i < bytes_to_read; i++)
     {
@@ -614,6 +617,9 @@ json DebugAdapter::GetMediaInfo()
     GG_Console_Type console_type = media->GetConsoleType();
     switch (console_type)
     {
+        case GG_CONSOLE_AUTO:
+            info["console_type"] = media->IsSGX() ? "SuperGrafx" : "Auto";
+            break;
         case GG_CONSOLE_PCE:
             info["console_type"] = "PC Engine";
             break;
@@ -633,6 +639,9 @@ json DebugAdapter::GetMediaInfo()
         GG_CDROM_Type cdrom_type = media->GetCDROMType();
         switch (cdrom_type)
         {
+            case GG_CDROM_AUTO:
+                info["cdrom_type"] = media->IsArcadeCard() ? "Arcade CD-ROM²" : "Super CD-ROM²";
+                break;
             case GG_CDROM_STANDARD:
                 info["cdrom_type"] = "CD-ROM²";
                 break;
@@ -1552,6 +1561,8 @@ json DebugAdapter::ListSaveStateSlots()
     json slots = json::array();
     json empty_slots = json::array();
 
+    update_savestates_data();
+
     for (int i = 0; i < 5; i++)
     {
         json slot;
@@ -1636,6 +1647,8 @@ json DebugAdapter::LoadState()
 
     int slot = config_emulator.save_slot + 1;
 
+    update_savestates_data();
+
     if (emu_savestates[config_emulator.save_slot].rom_name[0] == 0)
     {
         result["error"] = "Save state slot is empty";
@@ -1647,6 +1660,71 @@ json DebugAdapter::LoadState()
 
     result["success"] = true;
     result["slot"] = slot;
+
+    return result;
+}
+
+json DebugAdapter::SaveStateFile(const std::string& file_path)
+{
+    json result;
+
+    if (file_path.empty())
+    {
+        result["error"] = "File path is required";
+        Log("[MCP] SaveStateFile failed: File path is required");
+        return result;
+    }
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        Log("[MCP] SaveStateFile failed: No media loaded");
+        return result;
+    }
+
+    if (!m_core->SaveState(file_path.c_str(), -1, false))
+    {
+        result["error"] = "Failed to save state file";
+        Log("[MCP] SaveStateFile failed: %s", file_path.c_str());
+        return result;
+    }
+
+    result["success"] = true;
+    result["file_path"] = file_path;
+
+    return result;
+}
+
+json DebugAdapter::LoadStateFile(const std::string& file_path)
+{
+    json result;
+
+    if (file_path.empty())
+    {
+        result["error"] = "File path is required";
+        Log("[MCP] LoadStateFile failed: File path is required");
+        return result;
+    }
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        Log("[MCP] LoadStateFile failed: No media loaded");
+        return result;
+    }
+
+    if (!m_core->LoadState(file_path.c_str()))
+    {
+        result["error"] = "Failed to load state file";
+        Log("[MCP] LoadStateFile failed: %s", file_path.c_str());
+        return result;
+    }
+
+    events_sync_input();
+    rewind_reset();
+
+    result["success"] = true;
+    result["file_path"] = file_path;
 
     return result;
 }
@@ -1779,6 +1857,38 @@ json DebugAdapter::ControllerButton(int player, const std::string& button, const
     result["action"] = action;
 
     return result;
+}
+
+json DebugAdapter::GetInputState()
+{
+    static const char* button_names[] = {"up", "down", "left", "right", "select", "run", "I", "II", "III", "IV", "V", "VI"};
+    static const GG_Keys button_keys[] = {
+        GG_KEY_UP, GG_KEY_DOWN, GG_KEY_LEFT, GG_KEY_RIGHT, GG_KEY_SELECT, GG_KEY_RUN,
+        GG_KEY_I, GG_KEY_II, GG_KEY_III, GG_KEY_IV, GG_KEY_V, GG_KEY_VI
+    };
+
+    json players = json::array();
+    Input* input = m_core->GetInput();
+
+    for (int player = 0; player < GG_MAX_GAMEPADS; player++)
+    {
+        json pressed = json::array();
+        GG_Controllers controller = static_cast<GG_Controllers>(player);
+        bool is_mouse = IsMouseController(player + 1);
+
+        for (size_t i = 0; i < sizeof(button_keys) / sizeof(button_keys[0]); i++)
+        {
+            bool mouse_button = button_keys[i] == GG_KEY_SELECT || button_keys[i] == GG_KEY_RUN ||
+                button_keys[i] == GG_KEY_I || button_keys[i] == GG_KEY_II;
+
+            if ((!is_mouse || mouse_button) && input->IsKeyPressed(controller, button_keys[i]))
+                pressed.push_back(button_names[i]);
+        }
+
+        players.push_back({{"player", player + 1}, {"pressed", pressed}});
+    }
+
+    return {{"players", players}};
 }
 
 bool DebugAdapter::IsMouseController(int player) const
@@ -2416,6 +2526,63 @@ json DebugAdapter::ListSymbols()
 
     result["symbols"] = symbols_array;
     result["count"] = symbols_array.size();
+
+    return result;
+}
+
+json DebugAdapter::LookupSymbolByName(const std::string& name)
+{
+    json result;
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        return result;
+    }
+
+    std::vector<DebugSymbol*> symbols;
+    gui_debug_find_symbols(name.c_str(), symbols);
+
+    json matches = json::array();
+    for (size_t i = 0; i < symbols.size(); i++)
+    {
+        std::ostringstream bank_ss, address_ss;
+        bank_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << symbols[i]->bank;
+        address_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << symbols[i]->address;
+
+        matches.push_back({
+            {"bank", bank_ss.str()},
+            {"address", address_ss.str()},
+            {"name", symbols[i]->text}
+        });
+    }
+
+    result["matches"] = matches;
+    result["count"] = matches.size();
+    return result;
+}
+
+json DebugAdapter::LookupSymbolAtAddress(u8 bank, u16 address)
+{
+    json result;
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        return result;
+    }
+
+    std::ostringstream bank_ss, address_ss;
+    bank_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << (int)bank;
+    address_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << address;
+
+    DebugSymbol* symbol = gui_debug_get_symbol(bank, address);
+    result["found"] = IsValidPointer(symbol);
+    result["bank"] = bank_ss.str();
+    result["address"] = address_ss.str();
+
+    if (IsValidPointer(symbol))
+        result["name"] = symbol->text;
 
     return result;
 }
