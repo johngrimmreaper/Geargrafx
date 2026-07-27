@@ -62,7 +62,7 @@ struct McpInputMacroStep
 struct McpInputMacroState
 {
     bool active;
-    int64_t request_id;
+    json request_id;
     std::vector<McpInputMacroStep> steps;
     size_t step_index;
     bool waiting;
@@ -94,7 +94,7 @@ public:
         m_tcp_port = 7777;
         m_tcp_address = "127.0.0.1";
         m_pending_media_load = false;
-        m_pending_media_load_request_id = 0;
+        m_pending_media_load_request_id = json();
         reset_input_macro();
 
         for (int i = 0; i < GG_MAX_GAMEPADS; i++)
@@ -122,8 +122,12 @@ public:
 
     void Start()
     {
-        if (m_server && m_server->IsRunning())
-            return;
+        if (m_server)
+        {
+            if (m_server->IsRunning())
+                return;
+            SafeDelete(m_server);
+        }
 
         m_commandQueue.Clear();
         m_responseQueue.Reset();
@@ -160,15 +164,8 @@ public:
 
     void Stop()
     {
-        if (m_server)
-        {
-            m_server->Stop();
-
-            if (m_server->GetTransport())
-                m_server->GetTransport()->close();
-
-            SafeDelete(m_server);
-        }
+        SafeDelete(m_server);
+        m_commandQueue.Clear();
     }
 
     bool IsRunning() const
@@ -279,6 +276,9 @@ public:
 
             resp->result = m_server->ExecuteCommand(cmd->toolName, cmd->arguments);
 
+            if (is_get_input_state_command(cmd->toolName))
+                append_input_runtime_state(resp->result);
+
             update_response_error(resp);
             handle_controller_side_effects(core, resp->result);
 
@@ -316,20 +316,51 @@ private:
         return normalize_tool_name(tool_name) == "controller_macro";
     }
 
+    bool is_get_input_state_command(const std::string& tool_name) const
+    {
+        return normalize_tool_name(tool_name) == "get_input_state";
+    }
+
+    void append_input_runtime_state(json& result) const
+    {
+        if (result.contains("error"))
+            return;
+
+        json pending_releases = json::array();
+        for (size_t i = 0; i < m_delayedReleases.size(); i++)
+        {
+            pending_releases.push_back({
+                {"player", m_delayedReleases[i].player},
+                {"button", m_delayedReleases[i].button}
+            });
+        }
+        result["pending_releases"] = pending_releases;
+
+        json& players = result["players"];
+        static const char* motion_names[] = {"up", "down", "left", "right"};
+        for (int player = 0; player < GG_MAX_GAMEPADS; player++)
+        {
+            for (int direction = 0; direction < MCP_MOUSE_MOTION_COUNT; direction++)
+            {
+                if (m_mouseMotionHeld[player][direction])
+                    players[player]["pressed"].push_back(motion_names[direction]);
+            }
+        }
+    }
+
     void update_response_error(DebugResponse* resp)
     {
         if (!resp->result.contains("error"))
             return;
 
-        resp->isError = true;
-        resp->errorCode = -32603;
+        resp->isToolError = true;
         resp->errorMessage = resp->result["error"];
     }
 
     void reset_input_macro()
     {
         m_inputMacro.active = false;
-        m_inputMacro.request_id = 0;
+        m_inputMacro.request_id = json();
         m_inputMacro.steps.clear();
         m_inputMacro.step_index = 0;
         m_inputMacro.waiting = false;
@@ -339,7 +370,7 @@ private:
         m_inputMacro.restore_pause = false;
     }
 
-    json start_input_macro(const json& arguments, int64_t request_id)
+    json start_input_macro(const json& arguments, const json& request_id)
     {
         json result;
 
@@ -612,8 +643,7 @@ private:
 
         DebugResponse* resp = new DebugResponse();
         resp->requestId = m_inputMacro.request_id;
-        resp->isError = true;
-        resp->errorCode = -32603;
+        resp->isToolError = true;
         resp->errorMessage = error;
         resp->result = {{"error", error}};
 
@@ -698,7 +728,7 @@ private:
     int m_tcp_port;
     std::string m_tcp_address;
     bool m_pending_media_load;
-    int64_t m_pending_media_load_request_id;
+    json m_pending_media_load_request_id;
     std::string m_pending_media_load_file_path;
     std::vector<DelayedButtonRelease> m_delayedReleases;
     McpInputMacroState m_inputMacro;

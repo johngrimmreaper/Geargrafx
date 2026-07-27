@@ -30,11 +30,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>Desktop x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-windows-x64.zip">Geargrafx-1.7.14-desktop-windows-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-windows-x64.zip">Geargrafx-1.7.16-desktop-windows-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-windows-arm64.zip">Geargrafx-1.7.14-desktop-windows-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-windows-arm64.zip">Geargrafx-1.7.16-desktop-windows-arm64.zip</a></td>
     </tr>
     <tr>
       <td rowspan="3"><strong>macOS</strong></td>
@@ -43,11 +43,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     </tr>
     <tr>
       <td>Desktop Apple Silicon</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-macos-arm64.zip">Geargrafx-1.7.14-desktop-macos-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-macos-arm64.zip">Geargrafx-1.7.16-desktop-macos-arm64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Intel</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-macos-intel.zip">Geargrafx-1.7.14-desktop-macos-intel.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-macos-intel.zip">Geargrafx-1.7.16-desktop-macos-intel.zip</a></td>
     </tr>
     <tr>
       <td rowspan="5"><strong>Linux</strong></td>
@@ -60,15 +60,15 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.14-desktop-ubuntu24.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.16-desktop-ubuntu24.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 22.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.14-desktop-ubuntu22.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.16-desktop-ubuntu22.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.14-desktop-ubuntu24.04-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.16-desktop-ubuntu24.04-arm64.zip</a></td>
     </tr>
     <tr>
       <td><strong>MCPB</strong></td>
@@ -125,7 +125,7 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 - **BIOS**: Geargrafx requires a BIOS to run CD-ROM games. It is possible to load any BIOS but the System Card 3.0 with md5 `38179df8f4ac870017db21ebcbf53114` is recommended.
 - **CD-ROM Images**: Geargrafx supports `chd`, zipped and unzipped `cue/bin`, `cue/img` and `cue/iso` images. `cue/iso + wav` is also supported when audio track format is 44100Hz, 16 bit, stereo. It does not support MP3 or OGG audio tracks.
 - **Mouse Cursor**: Automatically hides when hovering over the main output window or when Main Menu is disabled.
-- **Portable Mode**: Create an empty file named `portable.ini` in the same directory as the application binary to enable portable mode.
+- **Portable Mode**: Create an empty file named `portable.ini` in the same directory as the application binary to enable portable mode. On macOS, place the file next to the `.app` bundle.
 
 ### Debugging Features
 - **Docking Windows**: In debug mode, you can dock windows together by pressing SHIFT and dragging a window onto another.
@@ -146,7 +146,7 @@ Options:
   -w, --windowed           Start in windowed mode with menu visible
       --mcp-stdio          Auto-start MCP server with stdio transport
       --mcp-http           Auto-start MCP server with HTTP transport
-      --mcp-no-router      Expose all MCP tools directly
+      --mcp-router         Enable compact MCP tool routing
       --mcp-http-address A HTTP bind address (default: 127.0.0.1)
       --mcp-http-port N    HTTP port for MCP server (default: 7777)
       --headless           Run without GUI (requires --mcp-stdio or --mcp-http)
@@ -156,7 +156,7 @@ Options:
 
 ### MCP Server
 
-Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more. HTTP transport binds to `127.0.0.1` by default, validates `Host` and browser `Origin` values against the configured endpoint, and can require bearer-token auth with the `GEARGRAFX_MCP_HTTP_TOKEN` environment variable.
+Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more. STDIO and HTTP transports are supported, with STDIO preferred.
 
 For complete setup instructions and tool documentation, see [MCP_README.md](MCP_README.md).
 

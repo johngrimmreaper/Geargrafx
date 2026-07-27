@@ -19,6 +19,151 @@
 
 #include "mcp_tool_registry.h"
 #include <cctype>
+#include <sstream>
+
+static const char* json_type_name(const json& value)
+{
+    if (value.is_object()) return "object";
+    if (value.is_array()) return "array";
+    if (value.is_string()) return "string";
+    if (value.is_boolean()) return "boolean";
+    if (value.is_number_integer() || value.is_number_unsigned()) return "integer";
+    if (value.is_number()) return "number";
+    if (value.is_null()) return "null";
+    return "unknown";
+}
+
+static bool json_type_matches(const json& value, const std::string& type)
+{
+    if (type == "object") return value.is_object();
+    if (type == "array") return value.is_array();
+    if (type == "string") return value.is_string();
+    if (type == "boolean") return value.is_boolean();
+    if (type == "integer") return value.is_number_integer() || value.is_number_unsigned();
+    if (type == "number") return value.is_number();
+    if (type == "null") return value.is_null();
+    return true;
+}
+
+static std::string json_path_child(const std::string& path, const std::string& child)
+{
+    return path.empty() ? child : path + "." + child;
+}
+
+static bool validate_json_schema(const json& value, const json& schema, const std::string& path, std::string& error)
+{
+    if (!schema.is_object())
+        return true;
+
+    if (schema.contains("type") && schema["type"].is_string())
+    {
+        std::string type = schema["type"].get<std::string>();
+        if (!json_type_matches(value, type))
+        {
+            error = "Parameter '" + path + "' must be " + type + ", got " + json_type_name(value);
+            return false;
+        }
+    }
+
+    if (schema.contains("enum") && schema["enum"].is_array())
+    {
+        bool found = false;
+        for (json::const_iterator it = schema["enum"].begin(); it != schema["enum"].end(); ++it)
+        {
+            if (value == *it)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            error = "Parameter '" + path + "' has an invalid value";
+            return false;
+        }
+    }
+
+    if (value.is_number())
+    {
+        double number = value.get<double>();
+        if (schema.contains("minimum") && schema["minimum"].is_number() && number < schema["minimum"].get<double>())
+        {
+            error = "Parameter '" + path + "' is below the minimum";
+            return false;
+        }
+        if (schema.contains("maximum") && schema["maximum"].is_number() && number > schema["maximum"].get<double>())
+        {
+            error = "Parameter '" + path + "' is above the maximum";
+            return false;
+        }
+    }
+
+    if (value.is_array())
+    {
+        if (schema.contains("minItems") && schema["minItems"].is_number_integer() && value.size() < schema["minItems"].get<size_t>())
+        {
+            error = "Parameter '" + path + "' has too few items";
+            return false;
+        }
+        if (schema.contains("maxItems") && schema["maxItems"].is_number_integer() && value.size() > schema["maxItems"].get<size_t>())
+        {
+            error = "Parameter '" + path + "' has too many items";
+            return false;
+        }
+        if (schema.contains("items") && schema["items"].is_object())
+        {
+            for (size_t i = 0; i < value.size(); i++)
+            {
+                std::ostringstream item_path;
+                item_path << path << "[" << i << "]";
+                if (!validate_json_schema(value[i], schema["items"], item_path.str(), error))
+                    return false;
+            }
+        }
+    }
+
+    if (value.is_object())
+    {
+        if (schema.contains("required") && schema["required"].is_array())
+        {
+            for (json::const_iterator it = schema["required"].begin(); it != schema["required"].end(); ++it)
+            {
+                if (it->is_string() && !value.contains(it->get<std::string>()))
+                {
+                    error = "Missing required parameter '" + json_path_child(path, it->get<std::string>()) + "'";
+                    return false;
+                }
+            }
+        }
+
+        const json* properties = NULL;
+        if (schema.contains("properties") && schema["properties"].is_object())
+            properties = &schema["properties"];
+
+        for (json::const_iterator it = value.begin(); it != value.end(); ++it)
+        {
+            std::string child_path = json_path_child(path, it.key());
+            if (properties && properties->contains(it.key()))
+            {
+                if (!validate_json_schema(it.value(), (*properties)[it.key()], child_path, error))
+                    return false;
+            }
+            else if (schema.contains("additionalProperties") && schema["additionalProperties"].is_boolean() && !schema["additionalProperties"].get<bool>())
+            {
+                error = "Unexpected parameter '" + child_path + "'";
+                return false;
+            }
+            else if (schema.contains("additionalProperties") && schema["additionalProperties"].is_object())
+            {
+                if (!validate_json_schema(it.value(), schema["additionalProperties"], child_path, error))
+                    return false;
+            }
+        }
+    }
+
+    return true;
+}
 
 struct McpToolCategory
 {
@@ -43,7 +188,7 @@ static const McpToolCategory kMcpToolCategories[] =
     {"memory", "Memory", "List memory areas, read/write bytes, select ranges, fill selections, search memory, and manage watches/bookmarks."},
     {"cpu", "CPU", "Inspect HuC6280 registers, flags, interrupts, MPRs, PC, stack, and write CPU register values."},
     {"disassembly", "Disassembly", "Read executed-code disassembly, run to addresses, inspect call stacks, and manage disassembly bookmarks."},
-    {"symbols", "Symbols", "Add, remove, load, and list debug symbols or labels used by disassembly and debugger views."},
+    {"symbols", "Symbols", "Add, remove, load, list, and look up debug symbols or labels."},
     {"hardware_video", "Video Hardware", "Inspect HuC6270 VDC, HuC6260 VCE, HuC6202 priority, sprites, backgrounds, tiles, and display state."},
     {"hardware_audio", "Audio Hardware", "Inspect PC Engine PSG audio state, channels, waveform, noise, volume, and sound registers."},
     {"hardware_cdrom", "CD-ROM Hardware", "Inspect CD-ROM drive, tracks, CD audio, ADPCM, Arcade Card, and disc subsystem state."},
@@ -51,7 +196,7 @@ static const McpToolCategory kMcpToolCategories[] =
     {"capture", "Capture", "Capture current screenshots and PC Engine sprite images or sprite metadata."},
     {"state", "Save States", "List save slots, select a slot, save emulator state, and load emulator state."},
     {"rewind", "Rewind", "Inspect rewind buffer status and seek to rewind snapshots for time-travel debugging."},
-    {"input", "Input", "Press, release, tap, macro, or configure controller type and TurboTap state."},
+    {"input", "Input", "Inspect or control gamepad, mouse, controller type, and TurboTap state."},
     {"trace", "Trace", "Read trace log entries and configure CPU, interrupt, video, audio, memory, CD-ROM, and debug-message tracing."},
     {"tools", "Other Tools", "Additional emulator/debugger tools that do not fit another category."}
 };
@@ -89,7 +234,8 @@ static const char* const kMcpDisassemblyTools[] =
 
 static const char* const kMcpSymbolTools[] =
 {
-    "add_symbol", "remove_symbol", "list_symbols", "load_symbols"
+    "add_symbol", "remove_symbol", "list_symbols", "load_symbols",
+    "lookup_symbol_by_name", "lookup_symbol_at_address"
 };
 
 static const char* const kMcpVideoTools[] =
@@ -121,7 +267,8 @@ static const char* const kMcpCaptureTools[] =
 
 static const char* const kMcpStateTools[] =
 {
-    "list_save_state_slots", "select_save_state_slot", "save_state", "load_state"
+    "list_save_state_slots", "select_save_state_slot", "save_state", "load_state",
+    "save_state_file", "load_state_file"
 };
 
 static const char* const kMcpRewindTools[] =
@@ -132,7 +279,7 @@ static const char* const kMcpRewindTools[] =
 static const char* const kMcpInputTools[] =
 {
     "controller_button", "controller_macro", "controller_set_type", "controller_set_turbo_tap",
-    "controller_get_type"
+    "controller_get_type", "get_input_state"
 };
 
 static const char* const kMcpTraceTools[] =
@@ -206,6 +353,24 @@ bool McpToolRegistry::HasCategory(const std::string& category) const
     }
 
     return false;
+}
+
+bool McpToolRegistry::ValidateArguments(const std::string& tool_name, const json& arguments, std::string& error) const
+{
+    const json* tool = FindTool(tool_name);
+    if (!tool)
+    {
+        error = "Unknown tool '" + tool_name + "'";
+        return false;
+    }
+
+    if (!tool->contains("inputSchema") || !(*tool)["inputSchema"].is_object())
+    {
+        error = "Tool has no valid input schema";
+        return false;
+    }
+
+    return validate_json_schema(arguments, (*tool)["inputSchema"], "", error);
 }
 
 json McpToolRegistry::GetStats() const
@@ -376,7 +541,24 @@ json McpToolRegistry::SearchTools(const std::string& query) const
         haystack += " ";
         haystack += AliasesForTool(name);
 
-        if (ToLower(haystack).find(query_lower) != std::string::npos)
+        std::string haystack_lower = ToLower(haystack);
+        std::istringstream terms(query_lower);
+        std::string term;
+        bool has_terms = false;
+        bool matches = true;
+
+        while (terms >> term)
+        {
+            has_terms = true;
+
+            if (haystack_lower.find(term) == std::string::npos)
+            {
+                matches = false;
+                break;
+            }
+        }
+
+        if (has_terms && matches)
         {
             tools.push_back(ToolToSearchJson(*it));
 
@@ -620,6 +802,9 @@ json McpToolRegistry::ToolToInfoJson(const json& tool) const
         result["inputSchema"] = tool["inputSchema"];
     else
         result["inputSchema"] = json::object();
+
+    if (tool.contains("annotations"))
+        result["annotations"] = tool["annotations"];
 
     return result;
 }

@@ -18,29 +18,29 @@ This server provides tools for game development, rom hacking, reverse engineerin
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-windows-x64.mcpb">Geargrafx-1.7.14-mcpb-windows-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-windows-x64.mcpb">Geargrafx-1.7.16-mcpb-windows-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-windows-arm64.mcpb">Geargrafx-1.7.14-mcpb-windows-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-windows-arm64.mcpb">Geargrafx-1.7.16-mcpb-windows-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>macOS</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-macos-x64.mcpb">Geargrafx-1.7.14-mcpb-macos-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-macos-x64.mcpb">Geargrafx-1.7.16-mcpb-macos-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-macos-arm64.mcpb">Geargrafx-1.7.14-mcpb-macos-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-macos-arm64.mcpb">Geargrafx-1.7.16-mcpb-macos-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>Linux</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-linux-x64.mcpb">Geargrafx-1.7.14-mcpb-linux-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-linux-x64.mcpb">Geargrafx-1.7.16-mcpb-linux-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.14/Geargrafx-1.7.14-mcpb-linux-arm64.mcpb">Geargrafx-1.7.14-mcpb-linux-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.16/Geargrafx-1.7.16-mcpb-linux-arm64.mcpb">Geargrafx-1.7.16-mcpb-linux-arm64.mcpb</a></td>
     </tr>
   </tbody>
 </table>
@@ -52,7 +52,8 @@ This server provides tools for game development, rom hacking, reverse engineerin
 - **Disassembly**: View disassembled code around PC or any address
 - **Hardware Inspection**: HuC6280 CPU, HuC6270 VDC, HuC6260 VCE, HuC6202 VPC, PSG, CD-ROM subsystems
 - **Sprite Viewer**: List and inspect all 64 sprites with images
-- **Symbol Support**: Add, remove, and list debug symbols
+- **Symbol Support**: Add, remove, list, and look up debug symbols
+- **Input State**: Inspect effective pressed buttons and pending tap releases
 - **Bookmarks**: Memory and disassembler bookmarks for navigation
 - **Call Stack**: View function call hierarchy
 - **Trace Logger**: CPU instruction trace with interleaved hardware events (VDC, VCE, PSG, timer, CD-ROM, SCSI, ADPCM, input)
@@ -71,7 +72,7 @@ The default mode uses standard input/output for communication. The emulator is l
 
 ### HTTP Transport
 
-The HTTP transport mode runs the emulator with an embedded web server on `127.0.0.1:7777/mcp` by default. The emulator stays running independently while the AI client connects via HTTP. The listener rejects foreign `Host` and browser `Origin` values that do not match the configured endpoint. If `GEARGRAFX_MCP_HTTP_TOKEN` is set, HTTP requests must include `Authorization: Bearer <token>`.
+The HTTP transport mode runs the emulator with an embedded web server on `127.0.0.1:7777/mcp` by default. The emulator stays running independently while the AI client connects via HTTP. Each request's `Host` and browser `Origin` must match the address on which its connection reached the server. Loopback mode can run without authentication; wildcard and other non-loopback bind addresses require `GEARGRAFX_MCP_HTTP_TOKEN`, and the server refuses to start without it.
 
 ### Headless Mode
 
@@ -79,9 +80,11 @@ Add `--headless` to run without a GUI window. This is useful for servers, CLI ag
 
 ## MCP Tool Router
 
-By default, Geargrafx exposes a compact set of high-frequency tools directly and routes advanced debugger tools through lightweight discovery tools. This keeps MCP context small while preserving access to the full debugger surface.
+By default, Geargrafx exposes every MCP tool directly. This avoids nested tool discovery in clients that already defer MCP schemas, including Claude Code.
 
-Direct tools: `load_media`, `get_media_info`, `debug_pause`, `debug_continue`, `debug_step_into`, `get_huc6280_status`, `read_memory`, `write_memory`, `get_disassembly`, `set_breakpoint`, `get_screenshot`, and `controller_button`.
+Add `--mcp-router` to expose a compact set of high-frequency tools directly and route advanced debugger tools through lightweight discovery tools. This reduces MCP context while preserving access to the full debugger surface.
+
+Direct tools in routed mode: `load_media`, `get_media_info`, `debug_pause`, `debug_continue`, `debug_step_into`, `get_huc6280_status`, `read_memory`, `write_memory`, `get_disassembly`, `set_breakpoint`, `get_screenshot`, and `controller_button`.
 
 Router tools:
 
@@ -89,7 +92,7 @@ Router tools:
 - `get_category_tools` lists routed tools in a category with compact descriptions.
 - `search_tools` searches direct and routed tools and returns compact category/tool/description matches.
 - `get_tool_info` returns one tool's real input schema and metadata.
-- `execute_tool` executes a routed tool by name with arguments. Use `get_tool_info` after discovery when you need the exact input schema.
+- `execute_tool` executes a routed tool by name. First use `search_tools` or `get_category_tools` to discover the tool, then call `get_tool_info` to obtain its exact input schema.
 
 Example routed call:
 
@@ -100,7 +103,7 @@ Example routed call:
 }
 ```
 
-Add `--mcp-no-router` to expose every MCP tool directly.
+Without `--mcp-router`, call every MCP tool directly.
 
 ## Quick Start
 
@@ -213,17 +216,19 @@ If you prefer to build from source or configure manually:
    ./geargrafx --mcp-http --mcp-http-port 3000
    ```
 
-   To bind to a custom address:
+  To bind to a custom address, set a bearer token first:
 
    ```bash
-   ./geargrafx --mcp-http --mcp-http-address 192.168.1.50 --mcp-http-port 3000
+  GEARGRAFX_MCP_HTTP_TOKEN="change-this-token" ./geargrafx --mcp-http --mcp-http-address 0.0.0.0 --mcp-http-port 3000
    ```
+
+  Clients must connect using the server's actual interface address, such as `http://192.168.1.50:3000/mcp`, not `0.0.0.0` or a spoofed loopback address.
 
    You can also start the server using the "MCP" menu in the GUI.
 
-2. **Optional: require bearer-token authentication**:
+2. **Configure bearer-token authentication**:
 
-   Set `GEARGRAFX_MCP_HTTP_TOKEN` before starting HTTP mode.
+  Set `GEARGRAFX_MCP_HTTP_TOKEN` before starting HTTP mode. Authentication is optional for loopback binds and required for wildcard or other non-loopback binds.
 
    macOS and Linux:
 
@@ -286,7 +291,7 @@ If you prefer to build from source or configure manually:
 6. **Restart your AI client** and start debugging
 
 > **Note:** The MCP HTTP Server must be running standalone before connecting the AI client.
-> **Security:** If `GEARGRAFX_MCP_HTTP_TOKEN` is unset, HTTP mode accepts unauthenticated requests from clients that pass the configured `Host` and `Origin` checks. The default bind address is local-only; use a non-loopback address only on trusted networks or with bearer-token authentication enabled.
+> **Security:** Without `GEARGRAFX_MCP_HTTP_TOKEN`, HTTP mode starts only on a loopback address. Wildcard and other non-loopback binds are refused. `Host` and browser `Origin` values are matched to the connection's actual destination address to prevent DNS rebinding and address spoofing.
 
 ## Usage Examples
 
@@ -315,7 +320,7 @@ Once configured, you can ask your AI assistant:
 
 ## Available MCP Tools
 
-This is the full tool catalog. By default, advanced tools are discoverable through `list_tool_categories`, `get_category_tools`, and `search_tools`, then invoked with `execute_tool`.
+This is the full tool catalog. All tools are exposed directly by default. With `--mcp-router`, discover advanced tools through `search_tools` or `get_category_tools`, inspect their schemas with `get_tool_info`, then invoke them with `execute_tool`.
 
 The server exposes tools organized in the following categories:
 
@@ -349,12 +354,15 @@ The server exposes tools organized in the following categories:
 - `list_memory_watches` - List all watches in memory area
 - `memory_search_capture` - Capture memory snapshot for search comparison
 - `memory_search` - Search memory with operators (<, >, ==, !=, <=, >=), compare types (previous, value, address), and data types (hex, signed, unsigned)
+- `memory_find_bytes` - Find byte sequences in memory
 
 ### Disassembly & Debugging
 - `get_disassembly` - Get disassembly for specified address range
 - `add_symbol` - Add symbol (label) at specified address
 - `remove_symbol` - Remove symbol
 - `list_symbols` - List all defined symbols
+- `lookup_symbol_by_name` - Find all exact-name symbol matches
+- `lookup_symbol_at_address` - Find symbol at bank/address
 - `add_disassembler_bookmark` - Add bookmark in disassembler
 - `remove_disassembler_bookmark` - Remove disassembler bookmark
 - `list_disassembler_bookmarks` - List all disassembler bookmarks
@@ -376,6 +384,7 @@ The server exposes tools organized in the following categories:
 - `get_huc6202_status` - Get VPC status (SuperGrafx only)
 - `get_psg_status` - Get PSG status for all 6 channels
 - `get_cdrom_status` - Get CD-ROM drive status (CD games only)
+- `list_cdrom_tracks` - List CD-ROM track types and LBA ranges
 - `get_cdrom_audio_status` - Get CD-ROM audio playback status
 - `get_adpcm_status` - Get ADPCM audio status
 - `get_arcade_card_status` - Get Arcade Card status
@@ -397,6 +406,8 @@ The server exposes tools organized in the following categories:
 - `select_save_state_slot` - Select active save state slot (1-5) for save/load operations
 - `save_state` - Save emulator state to currently selected slot
 - `load_state` - Load emulator state from currently selected slot
+- `save_state_file` - Save emulator state to an explicit file path
+- `load_state_file` - Load emulator state from an explicit file path
 - `set_fast_forward_speed` - Set fast forward speed multiplier (0: 1.5x, 1: 2x, 2: 2.5x, 3: 3x, 4: Unlimited)
 - `toggle_fast_forward` - Toggle fast forward mode on/off
 - `get_rewind_status` - Get rewind buffer status (enabled, snapshots, capacity, buffered seconds)
@@ -405,6 +416,7 @@ The server exposes tools organized in the following categories:
 ### Controller Input
 - `controller_button` - Control a button on a controller (player 1-5). Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, select, run, I, II, III, IV, V, VI
 - `controller_macro` - Run an ordered input macro. Top-level `player` defaults to 1, and each command may override it. Supported commands are `tap`, `press`, `release`, and `wait`; timing is explicit through `wait` frame counts
+- `get_input_state` - Get effective pressed buttons and pending tap releases
 - `controller_set_type` - Set controller type for a player: standard (2 buttons), avenue_pad_3 (3 buttons), avenue_pad_6 (6 buttons)
 - `controller_get_type` - Get the current controller type for a player (returns: standard, avenue_pad_3, or avenue_pad_6)
 - `controller_set_turbo_tap` - Enable or disable Turbo Tap (multitap) for 5-player support

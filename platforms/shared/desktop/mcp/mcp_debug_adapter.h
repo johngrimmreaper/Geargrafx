@@ -149,11 +149,14 @@ public:
     json SelectSaveStateSlot(int slot);
     json SaveState();
     json LoadState();
+    json SaveStateFile(const std::string& file_path);
+    json LoadStateFile(const std::string& file_path);
     json SetFastForwardSpeed(int speed);
     json ToggleFastForward(bool enabled);
 
     // Controller input
     json ControllerButton(int player, const std::string& button, const std::string& action);
+    json GetInputState();
     json ControllerSetType(int player, const std::string& type);
     json ControllerSetTurboTap(bool enabled);
     json ControllerGetType(int player);
@@ -168,6 +171,8 @@ public:
     json RemoveSymbol(u8 bank, u16 address);
     json LoadSymbols(const std::string& file_path);
     json ListSymbols();
+    json LookupSymbolByName(const std::string& name);
+    json LookupSymbolAtAddress(u8 bank, u16 address);
     json ListCallStack();
 
     // Memory area operations
