@@ -1,3 +1,16 @@
+geargrafx (1.7.17-1) UNRELEASED; urgency=medium
+
+  * Improved Arcade Card accuracy
+  * Applied audio DC filtering across all chip revisions
+  * Added command-line option for portable mode
+  * Improved MCP Server implementation
+  * libretro VFS support
+  * Improved compatibility in Dev Containers
+  * Updated Game Controller DB
+  * Many bug fixes and improvements
+
+ -- Reaper <JohnGrimmReaper@disroot.org>  Fri, 7 Aug 2026 13:03:41 +0000
+
 geargrafx (1.7.16-1) UNRELEASED; urgency=medium
 
   * [mcp] Hardened server protocol compliance with version negotiation
