@@ -24,6 +24,7 @@
 #include "huc6280_psg.h"
 #include "adpcm.h"
 #include "cdrom_audio.h"
+#include "trace_logger.h"
 
 Audio::Audio(Adpcm* adpcm, CdRomAudio* cdrom_audio)
 {
@@ -56,6 +57,21 @@ void Audio::Init()
 void Audio::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
+}
+
+void Audio::LogPsgEvent(u32 address, u8 value)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_PSG;
+    e.psg.channel = *m_psg->GetState()->CHANNEL_SELECT;
+    e.psg.reg = (u8)(address & 0x0F);
+    e.psg.value = value;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(address);
+    UNUSED(value);
+#endif
 }
 
 void Audio::Reset(bool cdrom)
@@ -109,6 +125,15 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
 
         if (m_mute)
             memset(sample_buffer, 0, sizeof(s16) * samples);
+        else if ((m_master_volume == 1.0f) && (m_psg_volume == 1.0f) &&
+            (m_adpcm_volume == 1.0f) && (m_cdrom_volume == 1.0f))
+        {
+            for (int i = 0; i < samples; i++)
+            {
+                s32 mix = (s32)m_psg_buffer[i] + m_adpcm_buffer[i] + m_cdrom_buffer[i];
+                sample_buffer[i] = (s16)CLAMP(mix, -32768, 32767);
+            }
+        }
         else
         {
             for (int i = 0; i < samples; i++)
@@ -139,6 +164,8 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
 
         if (m_mute || (m_master_volume <= 0.0f) || (m_psg_volume <= 0.0f))
             memset(sample_buffer, 0, sizeof(s16) * samples);
+        else if ((m_master_volume == 1.0f) && (m_psg_volume == 1.0f))
+            memcpy(sample_buffer, m_psg_buffer, sizeof(s16) * samples);
         else
         {
             for (int i = 0; i < samples; i++)
@@ -150,10 +177,6 @@ void Audio::EndFrame(s16* sample_buffer, int* sample_count)
         }
     }
 
-#ifndef GG_DISABLE_VGMRECORDER
-    if (m_vgm_recording_enabled)
-        m_vgm_recorder.UpdateTiming(*sample_count / 2);
-#endif
 }
 
 void Audio::SaveState(std::ostream& stream)
@@ -175,12 +198,12 @@ void Audio::LoadState(std::istream& stream, int version)
     m_psg->LoadState(stream, version);
 }
 
-bool Audio::StartVgmRecording(const char* file_path, int clock_rate)
+bool Audio::StartVgmRecording(const char* file_path, int clock_rate, const VgmMetadata& metadata)
 {
     if (m_vgm_recording_enabled)
         return false;
 
-    m_vgm_recorder.Start(file_path, clock_rate);
+    m_vgm_recorder.Start(file_path, clock_rate, metadata);
     m_vgm_recording_enabled = m_vgm_recorder.IsRecording();
 
     // Write initial state of all audio registers to VGM

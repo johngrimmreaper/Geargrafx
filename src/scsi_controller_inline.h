@@ -24,9 +24,27 @@
 #include "cdrom.h"
 #include "cdrom_common.h"
 #include "huc6280.h"
+#include "trace_logger.h"
+
+INLINE void ScsiController::TraceScsiEvent(u8 event, u8 command, u8 phase, u8 status,
+    u32 param, const u8* data, u8 size)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_SCSI, event))
+        LogScsiEvent(event, command, phase, status, param, data, size);
+}
+
+INLINE void ScsiController::TraceScsiProblemEvent(u8 event, u8 problem, u8 command, u32 param,
+    u32 extra)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_SCSI, event))
+        LogScsiProblemEvent(event, problem, command, param, extra);
+}
 
 INLINE void ScsiController::Clock(u32 cycles)
 {
+    if (m_next_event == SCSI_EVENT_NONE && m_next_load_cycles <= 0 && !m_bus_changed && m_auto_ack_cycles <= 0)
+        return;
+
     UpdateEvents(cycles);
     UpdateSectorLoading(cycles);
     UpdateScsi();
@@ -157,6 +175,16 @@ INLINE void ScsiController::RunEvent()
             break;
         case SCSI_EVENT_SET_DATA_IN_PHASE:
             SetPhase(SCSI_PHASE_DATA_IN);
+            break;
+        case SCSI_EVENT_SET_MESSAGE_IN_PHASE:
+            SetPhase(SCSI_PHASE_MESSAGE_IN);
+            break;
+        case SCSI_EVENT_SET_BUS_FREE_PHASE:
+            SetPhase(SCSI_PHASE_BUS_FREE);
+            break;
+        case SCSI_EVENT_SET_RESPONSE_REQ_SIGNAL:
+            SetSignal(SCSI_SIGNAL_REQ);
+            TraceScsiEvent(TRACE_SCSI_RESPONSE_BYTE, 0, (u8)m_phase, m_bus.db, m_data_buffer_offset);
             break;
         default:
             break;

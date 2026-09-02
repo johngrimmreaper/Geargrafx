@@ -48,7 +48,7 @@ int runahead_get_frames(void)
 {
     int frames = config_emulator.runahead;
 
-    if ((frames <= 0) || config_emulator.ffwd)
+    if ((frames <= 0) || config_emulator.ffwd || config_debug.debug)
         return 0;
 
 #if defined(GG_ENABLE_PHYSICAL_CDROM)
@@ -85,7 +85,8 @@ void runahead_run(int frames, u8* frame_buffer, s16* sample_buffer, int* sample_
     for (int i = 0; i < frames; i++)
     {
         int discarded_samples = 0;
-        core->RunToVBlank(frame_buffer, runahead_audio, &discarded_samples);
+        bool render = (i == (frames - 1));
+        core->RunToVBlank(frame_buffer, runahead_audio, &discarded_samples, NULL, render);
     }
 
     // Roll back to the authoritative frame. If restoring ever fails, the

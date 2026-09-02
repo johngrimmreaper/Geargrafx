@@ -23,6 +23,7 @@
 #include <iostream>
 #include <fstream>
 #include "common.h"
+#include "turbolink.h"
 
 class Audio;
 class Input;
@@ -37,6 +38,7 @@ class CdRomMedia;
 class CdRomAudio;
 class Adpcm;
 class ScsiController;
+class Random;
 class TraceLogger;
 
 class GeargrafxCore
@@ -58,8 +60,8 @@ public:
     GeargrafxCore();
     ~GeargrafxCore();
     void Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_format = GG_PIXEL_RGBA8888);
-    bool RunToVBlank(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug = NULL);
-    bool LoadMedia(const char* file_path);
+    bool RunToVBlank(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug = NULL, bool render = true);
+    bool LoadMedia(const char* file_path, bool softpatching = false);
 #if defined(GG_ENABLE_PHYSICAL_CDROM)
     bool LoadPhysicalCdRom(const char* device_id);
 #endif
@@ -85,7 +87,6 @@ public:
     bool LoadState(const u8* buffer, size_t size);
     bool GetSaveStateHeader(int index, const char* path, GG_SaveState_Header* header);
     bool GetSaveStateScreenshot(int index, const char* path, GG_SaveState_Screenshot* screenshot);
-    void ResetSound();
     bool GetRuntimeInfo(GG_Runtime_Info& runtime_info);
     Memory* GetMemory();
     Media* GetMedia();
@@ -102,6 +103,14 @@ public:
     Audio* GetAudio();
     Input* GetInput();
     u64 GetMasterClockCycles();
+    void SetTurboLinkCallbacks(
+        GG_TurboLink_Publish_Callback publish_callback, GG_TurboLink_Sample_Callback sample_callback,
+        GG_TurboLink_Sync_Callback sync_callback, void* user_data);
+    void SetTurboLinkCableConnected(bool connected);
+    void InvalidateTurboLinkSample();
+    bool IsTurboLinkCableConnected() const;
+    u64 GetTurboLinkCycle() const;
+    GG_TurboLink_Drive GetTurboLinkDrive() const;
     TraceLogger* GetTraceLogger();
 
 private:
@@ -111,7 +120,7 @@ private:
     template<bool is_cdrom, bool is_sgx>
     static void ClockHardwareCallback(void* context, u32 cycles);
     template<bool debugger, bool is_cdrom, bool is_sgx>
-    bool RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug);
+    bool RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug, bool render);
     bool SaveState(std::ostream& stream, size_t& size, bool screenshot);
     bool LoadState(std::istream& stream);
     std::string GetSaveStatePath(const char* path, int index);
@@ -131,9 +140,12 @@ private:
     CdRomAudio* m_cdrom_audio;
     Adpcm* m_adpcm;
     ScsiController* m_scsi_controller;
+    Random* m_random;
     bool m_paused;
     TraceLogger* m_trace_logger;
     u64 m_master_clock_cycles;
+    u64 m_turbolink_cycles;
+    u64 m_turbolink_next_sync_cycle;
     bool m_frame_ready;
     GG_MB128_Mode m_mb128_mode;
 };

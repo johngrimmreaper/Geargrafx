@@ -19,12 +19,14 @@
 
 #include "cdrom_audio.h"
 #include "cdrom_media.h"
+#include "trace_logger.h"
 
 CdRomAudio::CdRomAudio(CdRomMedia* cdrom_media)
 {
     m_cdrom_media = cdrom_media;
     InitPointer(m_cdrom);
     InitPointer(m_scsi_controller);
+    InitPointer(m_trace_logger);
     m_buffer_index = 0;
     m_frame_samples = 0;
     m_current_state = CD_AUDIO_STATE_STOPPED;
@@ -35,15 +37,22 @@ CdRomAudio::CdRomAudio(CdRomMedia* cdrom_media)
     m_current_sample = 0;
     m_stop_event = CD_AUDIO_STOP_EVENT_STOP;
     m_seek_cycles = 0;
+    m_playback_delay_cycles = 0;
     m_left_sample = 0;
     m_right_sample = 0;
+    m_sector_cache_lba = 0;
+    m_sector_cache_generation = 0;
+    m_sector_cache_attempted = false;
+    m_sector_cache_valid = false;
 
     m_state.CURRENT_STATE = &m_current_state;
     m_state.START_LBA = &m_start_lba;
     m_state.STOP_LBA = &m_stop_lba;
     m_state.CURRENT_LBA = &m_current_lba;
+    m_state.CURRENT_SAMPLE = &m_current_sample;
     m_state.STOP_EVENT = &m_stop_event;
     m_state.SEEK_CYCLES = &m_seek_cycles;
+    m_state.PLAYBACK_DELAY_CYCLES = &m_playback_delay_cycles;
     m_state.FRAME_SAMPLES = &m_frame_samples;
     m_state.BUFFER = m_buffer;
 }
@@ -60,6 +69,29 @@ void CdRomAudio::Init(CdRom* cdrom, ScsiController* scsi_controller)
     Reset();
 }
 
+void CdRomAudio::SetTraceLogger(TraceLogger* trace_logger)
+{
+    m_trace_logger = trace_logger;
+}
+
+void CdRomAudio::LogCdRomAudioEvent(u8 event, u32 lba, u32 param)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_CDROM;
+    e.cdrom.event = event;
+    e.cdrom.state = (u8)m_current_state;
+    e.cdrom.irq_type = (u8)m_stop_event;
+    e.cdrom.lba = lba;
+    e.cdrom.param = param;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(lba);
+    UNUSED(param);
+#endif
+}
+
 void CdRomAudio::Reset()
 {
     m_buffer_index = 0;
@@ -72,8 +104,10 @@ void CdRomAudio::Reset()
     m_current_sample = 0;
     m_stop_event = CD_AUDIO_STOP_EVENT_STOP;
     m_seek_cycles = 0;
+    m_playback_delay_cycles = 0;
     m_left_sample = 0;
     m_right_sample = 0;
+    InvalidateSectorCache();
 }
 
 int CdRomAudio::EndFrame(s16* sample_buffer)
@@ -107,6 +141,7 @@ void CdRomAudio::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_current_sample), sizeof(m_current_sample));
     stream.write(reinterpret_cast<const char*> (&m_stop_event), sizeof(m_stop_event));
     stream.write(reinterpret_cast<const char*> (&m_seek_cycles), sizeof(m_seek_cycles));
+    stream.write(reinterpret_cast<const char*> (&m_playback_delay_cycles), sizeof(m_playback_delay_cycles));
     stream.write(reinterpret_cast<const char*> (&m_left_sample), sizeof(m_left_sample));
     stream.write(reinterpret_cast<const char*> (&m_right_sample), sizeof(m_right_sample));
 }
@@ -153,10 +188,23 @@ void CdRomAudio::LoadState(std::istream& stream, int version)
         m_current_sample = 0;
     stream.read(reinterpret_cast<char*> (&m_stop_event), sizeof(m_stop_event));
     stream.read(reinterpret_cast<char*> (&m_seek_cycles), sizeof(m_seek_cycles));
+
+    if (version >= 34)
+        stream.read(reinterpret_cast<char*> (&m_playback_delay_cycles), sizeof(m_playback_delay_cycles));
+    else
+        m_playback_delay_cycles = 0;
+
     stream.read(reinterpret_cast<char*> (&m_left_sample), sizeof(m_left_sample));
     stream.read(reinterpret_cast<char*> (&m_right_sample), sizeof(m_right_sample));
 
+    InvalidateSectorCache();
     SyncMediaCurrentSector();
+}
+
+void CdRomAudio::InvalidateSectorCache()
+{
+    m_sector_cache_attempted = false;
+    m_sector_cache_valid = false;
 }
 
 void CdRomAudio::SyncMediaCurrentSector()

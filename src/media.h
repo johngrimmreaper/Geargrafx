@@ -48,11 +48,15 @@ public:
     bool IsPhysicalCdRom();
 #endif
     bool IsInGameDatabase();
+    const char* GetGameDatabaseName();
     bool IsGameExpress();
     bool IsArcadeCard();
     bool IsMB128();
-    bool IsValidBios(bool syscard);
-    bool IsLoadedBios();
+    bool IsSyscardBiosLoaded();
+    bool IsGameExpressBiosLoaded();
+    bool IsSyscardBiosValid();
+    bool IsGameExpressBiosValid();
+    bool IsBiosReady();
     void SetConsoleType(GG_Console_Type console_type);
     GG_Console_Type GetConsoleType();
     void SetCDROMType(GG_CDROM_Type cdrom_type);
@@ -60,6 +64,7 @@ public:
     HuCardMapper GetMapper();
     void ForceBackupRAM(bool force);
     bool IsBackupRAMForced();
+    void ForceGameExpress(bool force);
     void PreloadCdRom(bool enable);
     bool IsPreloadCdRomEnabled();
     int GetROMSize();
@@ -73,7 +78,7 @@ public:
     u8* GetROM();
     u8** GetROMMap();
     u32* GetROMBankOffset();
-    bool LoadMedia(const char* path);
+    bool LoadMedia(const char* path, bool softpatching = false);
     bool LoadHuCardFromBuffer(const u8* buffer, int size, const char* path);
     bool LoadCueFromFile(const char* path);
     bool LoadChdFromFile(const char* path);
@@ -87,9 +92,13 @@ public:
     void UnloadBios(bool syscard);
     void SetTempPath(const char* path);
     void GatherMediaInfo();
+    bool IsSoftpatchApplied() const;
+    const char* GetSoftpatchPath() const;
 
 private:
-    bool LoadMediaFromZipFile(const char* path);
+    bool LoadMediaFromZipFile(const char* path, bool softpatching);
+    bool LoadHuCardFromBufferWithSoftpatch(const u8* buffer, int size, const char* path,
+        bool softpatching);
     bool LoadBiosData(const u8* buffer, int size, bool syscard, const char* path);
     void GatherMediaInfoFromDB();
     void GatherBIOSInfoFromDB(bool syscard);
@@ -118,6 +127,7 @@ private:
     bool m_is_sgx;
     bool m_is_cdrom;
     bool m_is_in_game_database;
+    const char* m_game_database_name;
 #if defined(GG_ENABLE_PHYSICAL_CDROM)
     bool m_is_physical_cdrom;
     char m_physical_cdrom_device_id[256];
@@ -134,7 +144,10 @@ private:
     GG_Console_Type m_console_type;
     GG_CDROM_Type m_cdrom_type;
     bool m_force_backup_ram;
+    bool m_force_gameexpress;
     bool m_preload_cdrom;
+    bool m_softpatch_applied;
+    char m_softpatch_path[4096];
     u8 m_syscard_bios[GG_BIOS_SYSCARD_SIZE] = {};
     u8 m_gameexpress_bios[GG_BIOS_GAME_EXPRESS_SIZE] = {};
 };

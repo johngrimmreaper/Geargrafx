@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/github/license/drhelius/Geargrafx)](https://github.com/drhelius/Geargrafx/blob/main/LICENSE)
 [![Twitter Follow](https://img.shields.io/twitter/follow/drhelius)](https://x.com/drhelius)
 
-Geargrafx is a very accurate, cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / PCE CD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for debugging and tooling.
+Geargrafx is a very accurate, cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / PCE CD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for AI debugging and development.
 
 This is an open source project with its ongoing development made possible thanks to the support by these awesome [backers](backers.md). If you find it useful, please consider [sponsoring](https://github.com/sponsors/drhelius).
 
@@ -30,11 +30,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>Desktop x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-windows-x64.zip">Geargrafx-1.7.17-desktop-windows-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-windows-x64.zip">Geargrafx-1.7.20-desktop-windows-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-windows-arm64.zip">Geargrafx-1.7.17-desktop-windows-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-windows-arm64.zip">Geargrafx-1.7.20-desktop-windows-arm64.zip</a></td>
     </tr>
     <tr>
       <td rowspan="3"><strong>macOS</strong></td>
@@ -43,11 +43,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     </tr>
     <tr>
       <td>Desktop Apple Silicon</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-macos-arm64.zip">Geargrafx-1.7.17-desktop-macos-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-macos-arm64.zip">Geargrafx-1.7.20-desktop-macos-arm64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Intel</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-macos-intel.zip">Geargrafx-1.7.17-desktop-macos-intel.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-macos-intel.zip">Geargrafx-1.7.20-desktop-macos-intel.zip</a></td>
     </tr>
     <tr>
       <td rowspan="5"><strong>Linux</strong></td>
@@ -60,15 +60,15 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.17-desktop-ubuntu24.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.20-desktop-ubuntu24.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 22.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.17-desktop-ubuntu22.04-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.20-desktop-ubuntu22.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.17-desktop-ubuntu24.04-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.20-desktop-ubuntu24.04-arm64.zip</a></td>
     </tr>
     <tr>
       <td><strong>MCPB</strong></td>
@@ -100,6 +100,7 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 - Save states with preview and rewind support.
 - Run-ahead support to reduce input latency.
 - Backup RAM and Memory Base 128 support.
+- TurboLink multiplayer for two emulator instances on the same machine.
 - Multi Tap (up to 5 players).
 - Standard Gamepad (2 buttons), Avenue Pad 3 (3 buttons, auto-configured based on game), Avenue Pad 6 (6 buttons) and Mouse.
 - Adjustable scanline count (224p, 240p or manual).
@@ -138,21 +139,22 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 geargrafx [options] [game_file] [symbol_file]
 
 Arguments:
-  [game_file]              Game file: accepts ROMs (.pce, .sgx, .hes), CUE (.cue) or ZIP (.zip)
-  [symbol_file]            Optional symbol file for debugging
+  [game_file]                 Game file: accepts ROMs (.pce, .sgx, .hes), CUE (.cue) or ZIP (.zip)
+  [symbol_file]               Optional symbol file for debugging
 
 Options:
-  -f, --fullscreen         Start in fullscreen mode
-  -w, --windowed           Start in windowed mode with menu visible
-      --mcp-stdio          Auto-start MCP server with stdio transport
-      --mcp-http           Auto-start MCP server with HTTP transport
-      --mcp-router         Enable compact MCP tool routing
-      --mcp-http-address A HTTP bind address (default: 127.0.0.1)
-      --mcp-http-port N    HTTP port for MCP server (default: 7777)
-      --headless           Run without GUI (requires --mcp-stdio or --mcp-http)
-      --portable           Store configuration and user data beside the application
-  -v, --version            Display version information
-  -h, --help               Display this help message
+    -f, --fullscreen          Start in fullscreen mode
+    -w, --windowed            Start in windowed mode with menu visible
+      --mcp-stdio             Auto-start MCP server with stdio transport
+      --mcp-http              Auto-start MCP server with HTTP transport
+      --mcp-router            Enable compact MCP tool routing
+      --mcp-http-address A    HTTP bind address (default: 127.0.0.1)
+      --mcp-http-port N       HTTP port for MCP server (default: 7777)
+      --turbolink-join N      Join local TurboLink shared session 1-255
+      --headless              Run without GUI (requires MCP or TurboLink)
+      --portable              Store configuration and user data beside the application
+    -v, --version             Display version information
+    -h, --help                Display this help message
 ```
 
 ### MCP Server
@@ -160,6 +162,10 @@ Options:
 Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more. STDIO and HTTP transports are supported, with STDIO preferred.
 
 For complete setup instructions and tool documentation, see [MCP_README.md](MCP_README.md).
+
+### TurboLink Multiplayer
+
+Choose the same session number in the `TurboLink` menu on both instances and select `Connect`, or start each process with `--turbolink-join N`. Sessions use local shared memory and support exactly two peers on one computer. Independent instances should use separate application copies or `--portable` data directories so configuration, saves, and single-instance handling do not conflict.
 
 ### Agent Skills
 

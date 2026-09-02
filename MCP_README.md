@@ -18,29 +18,29 @@ This server provides tools for game development, rom hacking, reverse engineerin
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-windows-x64.mcpb">Geargrafx-1.7.17-mcpb-windows-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-windows-x64.mcpb">Geargrafx-1.7.20-mcpb-windows-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-windows-arm64.mcpb">Geargrafx-1.7.17-mcpb-windows-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-windows-arm64.mcpb">Geargrafx-1.7.20-mcpb-windows-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>macOS</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-macos-x64.mcpb">Geargrafx-1.7.17-mcpb-macos-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-macos-x64.mcpb">Geargrafx-1.7.20-mcpb-macos-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-macos-arm64.mcpb">Geargrafx-1.7.17-mcpb-macos-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-macos-arm64.mcpb">Geargrafx-1.7.20-mcpb-macos-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>Linux</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-linux-x64.mcpb">Geargrafx-1.7.17-mcpb-linux-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-linux-x64.mcpb">Geargrafx-1.7.20-mcpb-linux-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.17/Geargrafx-1.7.17-mcpb-linux-arm64.mcpb">Geargrafx-1.7.17-mcpb-linux-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-linux-arm64.mcpb">Geargrafx-1.7.20-mcpb-linux-arm64.mcpb</a></td>
     </tr>
   </tbody>
 </table>
@@ -50,7 +50,7 @@ This server provides tools for game development, rom hacking, reverse engineerin
 - **Full Debugger Access**: CPU registers, memory inspection, breakpoints, and execution control
 - **Multiple Memory Areas**: Access RAM, VRAM, ROM, CD-ROM RAM, Arcade Card RAM, and more
 - **Disassembly**: View disassembled code around PC or any address
-- **Hardware Inspection**: HuC6280 CPU, HuC6270 VDC, HuC6260 VCE, HuC6202 VPC, PSG, CD-ROM subsystems
+- **Hardware Inspection**: HuC6280 CPU, HuC6270 VDC, HuC6260 VCE, HuC6202 VPC, PSG, CD-ROM subsystems, TurboLink
 - **Sprite Viewer**: List and inspect all 64 sprites with images
 - **Symbol Support**: Add, remove, list, and look up debug symbols
 - **Input State**: Inspect effective pressed buttons and pending tap releases
@@ -342,7 +342,7 @@ The server exposes tools organized in the following categories:
 - `debug_step_into` - Step one instruction
 - `debug_step_over` - Step over subroutine calls
 - `debug_step_out` - Step out of current subroutine
-- `debug_step_frame` - Step one or more frames
+- `debug_step_frame` - Step one or more frames. Optional `frames` is 1-1000 (default 1). Optional `mode` is `async` (default, returns after scheduling) or `sync` (returns after all requested frames complete at VBlank). Use `mode: "sync"` when issuing dependent tool calls.
 - `debug_run_to_cursor` - Continue execution until reaching specified address
 - `debug_reset` - Reset emulation
 - `debug_get_status` - Get debug status (paused, at_breakpoint, pc address)
@@ -366,7 +366,7 @@ The server exposes tools organized in the following categories:
 - `list_memory_watches` - List all watches in memory area
 - `memory_search_capture` - Capture memory snapshot for search comparison
 - `memory_search` - Search memory with operators (<, >, ==, !=, <=, >=), compare types (previous, value, address), and data types (hex, signed, unsigned)
-- `memory_find_bytes` - Find byte sequences in memory
+- `memory_find` - Find hex byte sequences (`hex_bytes`) or text (`text`, optional `case_sensitive`) in memory
 
 ### Disassembly & Debugging
 - `get_disassembly` - Get disassembly for specified address range
@@ -379,8 +379,82 @@ The server exposes tools organized in the following categories:
 - `remove_disassembler_bookmark` - Remove disassembler bookmark
 - `list_disassembler_bookmarks` - List all disassembler bookmarks
 - `get_call_stack` - View function call hierarchy
-- `get_trace_log` - Read trace logger entries (CPU + hardware events). Use set_trace_log to start/stop the logger
-- `set_trace_log` - Start or stop the trace logger. Records CPU instructions and hardware events into a ring buffer. Filter event types with optional booleans
+- `get_trace_log` - Read trace logger entries (CPU + hardware events) using absolute sequence pagination. Use `set_trace_log` to start or stop the logger
+- `set_trace_log` - Start or stop trace logging and configure exact event filters and memory or disk storage
+
+#### Trace pagination
+
+`get_trace_log` returns:
+
+- `total_entries`: entries currently retained in the memory ring.
+- `total_logged`: the next absolute sequence number. It is monotonic for the process lifetime and is not reset by clear, resize, media changes, or save-state loads.
+- `oldest_sequence`: absolute sequence of the oldest retained entry (`total_logged - total_entries`).
+- `start`: actual absolute sequence used for this page.
+- `next_sequence`: absolute sequence to pass as the next `start`.
+- `count`: number of returned entries.
+- `overrun`: `true` when a requested `start` had expired and was clamped to `oldest_sequence`.
+- `lines`: formatted trace entries in sequence order.
+
+When `start` is omitted, the latest 100 retained entries are returned. A negative `start` requests that many entries from the retained tail. Positive starts are absolute sequences. `count` defaults to 100 and is capped at 1000. A requested sequence older than `oldest_sequence` starts at the oldest retained entry and sets `overrun` to `true`. A sequence at or beyond `total_logged` returns an empty page with `start` and `next_sequence` equal to the requested value and `overrun` set to `false`.
+
+Memory-mode counters shown in the GUI and written by manual export use the same absolute sequence values as MCP. Disk trace files use a separate zero-based entry counter local to each file.
+
+#### Trace filters
+
+Omitting `filters` enables the safe default of CPU instructions and IRQs. When supplied, `filters` must be non-empty, unique, and contain only these exact values:
+
+```text
+cpu.instructions
+cpu.irqs
+vdc.registers
+vdc.irqs
+vdc.dma
+vce.registers
+vce.timing
+input.reads
+input.writes
+input.turbolink
+input.turbolink.writes
+input.turbolink.drive
+input.turbolink.samples
+input.turbolink.cable
+timer.irqs
+timer.registers
+cdrom.irqs
+cdrom.control
+cdrom.audio
+psg.global_lfo
+psg.frequency
+psg.channel
+psg.wave_dda
+psg.noise
+adpcm.registers
+adpcm.dma
+adpcm.playback
+adpcm.transfers
+adpcm.irqs
+scsi.commands
+scsi.phases
+scsi.responses
+scsi.response_bytes
+scsi.transfers
+scsi.problems
+system.mpr
+system.mapper
+system.interrupts
+```
+
+`input.turbolink` enables all four TurboLink streams. `writes` records every `$1000` O-port access, `drive` records only changes to the BU5782K pull-low outputs, `samples` records physical LINK1/LINK2 levels and the actual K result with D0-D3, and `cable` records activation/deactivation of the local emulated hardware endpoint. Shared-memory heartbeats and barriers are intentionally not emulation trace events.
+
+The `system` streams cover TAM/MPR mappings, Street Fighter II mapper latch updates, and HuC6280 interrupt-controller mask/acknowledgement writes. ADPCM lines include playing, pending, half-IRQ, and end-IRQ state bits.
+
+#### Trace storage
+
+Starting a stopped logger without `output` selects `memory`. Memory capacities are `100K`, `500K`, `1M`, `2M`, and `5M` entries; the persisted default is `100K`. Disk limits are `10MB`, `50MB`, `100MB`, `250MB`, `500MB`, `1GB`, and `unbounded`; the persisted default is `100MB`.
+
+Storage changes while tracing is active cleanly stop and restart the logger. Repeating the active storage configuration is idempotent and only updates filters. Stopping preserves retained memory entries; changing memory capacity or starting disk output resets the ring used by that recording. Disk output is flushed before stop, reset, media changes, physical CD-ROM eject/error, save-state loads, and shutdown. Failures are reported in the UI and application log but do not cancel unrelated emulator operations.
+
+`output_path` is a directory only, not a filename. Geargrafx creates a unique timestamped UTF-compatible trace filename in that directory. When omitted, the configured default, media, or custom directory policy remains in effect.
 
 ### Breakpoints
 - `set_breakpoint` - Set execution, read, or write breakpoint (supports 5 memory areas: rom_ram, vram, palette, huc6270_reg, huc6260_reg)
@@ -400,6 +474,8 @@ The server exposes tools organized in the following categories:
 - `get_cdrom_audio_status` - Get CD-ROM audio playback status
 - `get_adpcm_status` - Get ADPCM audio status
 - `get_arcade_card_status` - Get Arcade Card status
+- `get_turbolink_status` - Get BU5782K SEL/CLR and pull-low state, the last actual K/line sample with D0-D3 and event ticks, plus shared-memory membership, hardware readiness, pacing, progress, barrier, lease, generation, and recovery diagnostics
+- `reset_turbolink_metrics` - Reset TurboLink activity, synchronization, wait, and recovery counters
 
 ### Sprites
 - `list_sprites` - List all 64 sprites with position, size, pattern, palette
@@ -428,7 +504,7 @@ The server exposes tools organized in the following categories:
 ### Controller Input
 - `controller_button` - Control a button on a controller (player 1-5). Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, select, run, I, II, III, IV, V, VI
 - `controller_macro` - Run an ordered input macro. Top-level `player` defaults to 1, and each command may override it. Supported commands are `tap`, `press`, `release`, and `wait`; timing is explicit through `wait` frame counts
-- `get_input_state` - Get effective pressed buttons and pending tap releases
+- `get_input_state` - Get effective pressed buttons and current controller input state
 - `controller_set_type` - Set controller type for a player: standard (2 buttons), avenue_pad_3 (3 buttons), avenue_pad_6 (6 buttons)
 - `controller_get_type` - Get the current controller type for a player (returns: standard, avenue_pad_3, or avenue_pad_6)
 - `controller_set_turbo_tap` - Enable or disable Turbo Tap (multitap) for 5-player support

@@ -146,6 +146,19 @@ INLINE GG_CdRomTrackType CdRomMedia::GetTrackType(u8 track_number)
     }
 }
 
+INLINE bool CdRomMedia::IsAudioSector(u32 lba)
+{
+    if (IsValidPointer(m_current_image))
+    {
+        return m_current_image->IsAudioSector(lba);
+    }
+    else
+    {
+        Error("CdRomMedia::IsAudioSector failed - Current image is NULL");
+        return false;
+    }
+}
+
 INLINE GG_CdRomMSF CdRomMedia::GetCdRomLength()
 {
     if (IsValidPointer(m_current_image))
@@ -183,6 +196,11 @@ INLINE u32 CdRomMedia::GetCurrentSector()
         Error("CdRomMedia::GetCurrentSector failed - Current image is NULL");
         return 0;
     }
+}
+
+INLINE u32 CdRomMedia::GetMediaGeneration()
+{
+    return m_media_generation;
 }
 
 INLINE void CdRomMedia::SetCurrentSector(u32 sector)

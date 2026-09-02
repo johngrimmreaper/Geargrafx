@@ -524,20 +524,19 @@ struct retro_core_option_v2_definition option_defs_us[] = {
     },
     {
         "geargrafx_cdrom_bios",
-        "CD-ROM Bios (restart)",
+        "CD BIOS (restart)",
         NULL,
-        "Specify the BIOS file to use for CD-ROM emulation. 'Auto' automatically selects the appropriate BIOS based on the loaded content. You can also manually choose one for compatibility with specific games.",
+        "Select the System Card BIOS used by standard CD-ROM games. System Card 3 is recommended. Known Game Express games are detected automatically and use gexpress.pce. Use 'Force Game Express' only for unrecognized or modified discs.",
         NULL,
         "cdrom",
         {
-            { "Auto",          NULL },
-            { "System Card 1", NULL },
-            { "System Card 2", NULL },
-            { "System Card 3", NULL },
-            { "Game Express",  NULL },
+            { "System Card 3",      NULL },
+            { "System Card 2",      NULL },
+            { "System Card 1",      NULL },
+            { "Force Game Express", NULL },
             { NULL, NULL },
         },
-        "Auto"
+        "System Card 3"
     },
     {
         "geargrafx_cdrom_preload",
@@ -632,7 +631,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "geargrafx_avenue_pad_3_switch",
         "Avenue Pad 3 Switch",
         NULL,
-        "Configure the button mapping for the Avenue Pad 3 controller's third button (III). 'Auto' automatically selects the appropriate mapping based on the game.",
+        "Configure whether Button III maps to SELECT or RUN for the Avenue Pad 3. Button IV maps to the other action. 'Auto' uses the game database and defaults to RUN.",
         NULL,
         "input",
         {

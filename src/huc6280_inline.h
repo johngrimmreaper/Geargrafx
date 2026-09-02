@@ -28,6 +28,30 @@
 #include "memory.h"
 #include "trace_logger.h"
 
+INLINE void HuC6280::TraceCpuEvent()
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEnabled(TRACE_CPU))
+        LogCpuEvent();
+}
+
+INLINE void HuC6280::TraceCpuIrqEvent(u16 pc, u16 vector)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEnabled(TRACE_CPU_IRQ))
+        LogCpuIrqEvent(pc, vector);
+}
+
+INLINE void HuC6280::TraceTimerEvent(u8 event, u8 value)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_TIMER, event))
+        LogTimerEvent(event, value);
+}
+
+INLINE void HuC6280::TraceSystemInterruptEvent(u8 event, u16 address, u8 raw)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_SYSTEM, event))
+        LogSystemInterruptEvent(event, address, raw);
+}
+
 INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
 {
 #if !defined(GG_DISABLE_DISASSEMBLER)
@@ -36,7 +60,6 @@ INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
     m_debug_brk_breakpoint_hit = false;
     m_breakpoint_hit_address_valid = false;
     m_prev_opcode_address = m_PC.GetValue();
-    u16 trace_pc = m_PC.GetValue();
 #endif
 
     m_transfer_flag = IsSetFlag(FLAG_TRANSFER);
@@ -47,34 +70,20 @@ INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
     m_clocked_master_cycles = 0;
     m_extra_master_cycles = 0;
 
+    TraceCpuEvent();
+
     u8 opcode = Fetch8();
     m_cycles += k_huc6280_opcode_cycles[opcode];
 
     CheckIRQs();
 
-    (this->*m_opcodes[opcode])();
+    m_opcodes[opcode](this);
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
     if (IsValidPointer(instruction_completed))
         *instruction_completed = (m_transfer_state == 0);
 #else
     UNUSED(instruction_completed);
-#endif
-
-#if !defined(GG_DISABLE_DISASSEMBLER)
-    if (m_trace_logger->IsEnabled(TRACE_CPU) && (m_transfer_state == 0))
-    {
-        GG_Trace_Entry e = {};
-        e.type = TRACE_CPU;
-        e.cpu.pc = trace_pc;
-        e.cpu.bank = m_memory->GetBank(trace_pc);
-        e.cpu.a = m_A.GetValue();
-        e.cpu.x = m_X.GetValue();
-        e.cpu.y = m_Y.GetValue();
-        e.cpu.s = m_S.GetValue();
-        e.cpu.p = m_P.GetValue();
-        m_trace_logger->TraceLog(e);
-    }
 #endif
 
     if((m_irq_pending || IS_SET_BIT(m_interrupt_request_register, 2)) && (m_transfer_state == 0))
@@ -112,17 +121,9 @@ inline void HuC6280::HandleIRQ()
 
     m_cycles += 8;
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-    if (m_trace_logger->IsEnabled(TRACE_CPU_IRQ))
-    {
-        GG_Trace_Entry e = {};
-        e.type = TRACE_CPU_IRQ;
-        e.irq.pc = pc;
-        e.irq.vector = vector;
-        e.irq.irq_mask = m_interrupt_disable_register;
-        m_trace_logger->TraceLog(e);
-    }
+    TraceCpuIrqEvent(pc, vector);
 
+#if !defined(GG_DISABLE_DISASSEMBLER)
     m_debug_next_irq =((0xFFFA - vector) >> 1) + 3;
     u16 dest = m_PC.GetValue();
     PushCallStack(pc, dest, pc, m_memory->GetBank(dest));
@@ -164,11 +165,9 @@ INLINE void HuC6280::SetHardwareClock(GG_Clock_Hardware_Fn clock_fn, void* conte
     m_clock_hardware_context = context;
 }
 
-INLINE u32 HuC6280::ConsumeClockedMasterCycles()
+INLINE u32 HuC6280::GetClockedMasterCycles() const
 {
-    u32 cycles = m_clocked_master_cycles;
-    m_clocked_master_cycles = 0;
-    return cycles;
+    return m_clocked_master_cycles;
 }
 
 INLINE void HuC6280::ClockHardwareCycles(u32 master_cycles)
@@ -230,10 +229,14 @@ INLINE u8 HuC6280:: ReadInterruptRegister(u16 address)
 INLINE void HuC6280::WriteInterruptRegister(u16 address, u8 value)
 {
     if ((address & 1) == 0)
+    {
+        TraceSystemInterruptEvent(TRACE_SYSTEM_IRQ_MASK_WRITE, address, value);
         m_interrupt_disable_register = value & 0x07;
+    }
     else
     {
         // Acknowledge TIQ
+        TraceSystemInterruptEvent(TRACE_SYSTEM_IRQ_ACK, address, value);
         m_interrupt_request_register = UNSET_BIT(m_interrupt_request_register, 2);
     }
 }
@@ -252,17 +255,7 @@ INLINE void HuC6280::ClockTimer(u32 cycles)
         {
             m_timer_counter = m_timer_reload;
             m_interrupt_request_register = SET_BIT(m_interrupt_request_register, 2);
-
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            if (m_trace_logger->IsEnabled(TRACE_TIMER))
-            {
-                GG_Trace_Entry e = {};
-                e.type = TRACE_TIMER;
-                e.timer.counter = m_timer_counter;
-                e.timer.reload = m_timer_reload;
-                m_trace_logger->TraceLog(e);
-            }
-#endif
+            TraceTimerEvent(TRACE_TIMER_IRQ_REQUEST, 0);
         }
         else
             m_timer_counter--;
@@ -291,9 +284,13 @@ INLINE void HuC6280::WriteTimerRegister(u16 address, u8 value)
                 m_timer_cycles = k_huc6280_timer_divisor;
             }
         }
+        TraceTimerEvent(TRACE_TIMER_CONTROL_WRITE, value);
     }
     else
+    {
         m_timer_reload = value & 0x7F;
+        TraceTimerEvent(TRACE_TIMER_RELOAD_WRITE, value);
+    }
 }
 
 INLINE u8 HuC6280::Fetch8()
@@ -741,10 +738,32 @@ INLINE void HuC6280::DisassembleNextOPCode()
 
     if (!changed && record->size != 0)
     {
-        if (m_debug_next_irq > 0)
+        bool refresh_context = false;
+
+        if (record->jump)
         {
-            record->irq = m_debug_next_irq;
-            m_debug_next_irq = 0;
+            u16 jump_address = record->jump_address;
+            GG_OPCode_Type type = k_huc6280_opcode_names[record->opcodes[0]].type;
+            if (type == GG_OPCode_Type_1b_Relative)
+                jump_address = address + record->size + (s8)record->opcodes[1];
+            else if (type == GG_OPCode_Type_1b_1b_Relative)
+                jump_address = address + record->size + (s8)record->opcodes[2];
+
+            u8 jump_bank = m_memory->GetBank(jump_address);
+            refresh_context = jump_address != record->jump_address ||
+                jump_bank != record->jump_bank;
+        }
+
+        if (refresh_context || m_debug_next_irq > 0)
+        {
+            if (m_debug_next_irq == 0)
+                m_debug_next_irq = record->irq;
+            PopulateDisassemblerRecord(record, opcode, address);
+        }
+        else if (!record->jump && record->has_operand_address)
+        {
+            record->operand_bank = m_memory->GetBank(record->operand_is_zp ?
+                (0x2000 | record->operand_address) : record->operand_address);
         }
         return;
     }
@@ -822,6 +841,7 @@ INLINE void HuC6280::SetDisassemblerOperand(GG_Disassembler_Record* record, u16 
     record->has_operand_address = true;
     record->operand_address = address;
     record->operand_is_zp = is_zp;
+    record->operand_bank = m_memory->GetBank(is_zp ? (0x2000 | address) : address);
     SetDisassemblerOperandText(record, text);
 }
 
@@ -844,6 +864,7 @@ INLINE void HuC6280::PopulateUnavailableDisassemblerRecord(GG_Disassembler_Recor
     record->has_operand_address = false;
     record->operand_address = 0;
     record->operand_is_zp = false;
+    record->operand_bank = 0;
     record->operand_offset = 0;
     record->operand_length = 0;
 
@@ -888,6 +909,7 @@ INLINE void HuC6280::PopulateDisassemblerRecord(GG_Disassembler_Record* record, 
     record->has_operand_address = false;
     record->operand_address = 0;
     record->operand_is_zp = false;
+    record->operand_bank = 0;
     record->operand_offset = 0;
     record->operand_length = 0;
 

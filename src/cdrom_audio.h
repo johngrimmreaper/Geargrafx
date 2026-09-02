@@ -27,6 +27,7 @@
 class CdRom;
 class CdRomMedia;
 class ScsiController;
+class TraceLogger;
 
 class CdRomAudio
 {
@@ -52,8 +53,10 @@ public:
         u32* START_LBA;
         u32* STOP_LBA;
         u32* CURRENT_LBA;
+        u32* CURRENT_SAMPLE;
         CdAudioStopEvent* STOP_EVENT;
         s32* SEEK_CYCLES;
+        s32* PLAYBACK_DELAY_CYCLES;
         s32* FRAME_SAMPLES;
         s16* BUFFER;
     };
@@ -79,15 +82,20 @@ public:
     s16 GetRightSample();
     void SaveState(std::ostream& stream);
     void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
+    void SetTraceLogger(TraceLogger* trace_logger);
 
 private:
     void GenerateSamples();
+    void InvalidateSectorCache();
     void SyncMediaCurrentSector();
+    void TraceCdRomAudioEvent(u8 event, u32 lba, u32 param = 0);
+    void LogCdRomAudioEvent(u8 event, u32 lba, u32 param);
 
 private:
     CdRom* m_cdrom;
     CdRomMedia* m_cdrom_media;
     ScsiController* m_scsi_controller;
+    TraceLogger* m_trace_logger;
     CdRomAudio_State m_state;
     s32 m_buffer_index;
     s32 m_frame_samples;
@@ -100,8 +108,17 @@ private:
     u32 m_current_sample;
     CdAudioStopEvent m_stop_event;
     s32 m_seek_cycles;
+    s32 m_playback_delay_cycles;
     s16 m_left_sample;
     s16 m_right_sample;
+    s16 m_sector_cache[2352 / sizeof(s16)] = {};
+    u32 m_sector_cache_lba;
+    u32 m_sector_cache_generation;
+    bool m_sector_cache_attempted;
+    bool m_sector_cache_valid;
+
+    // DShadof measured delay between seek completion status and audible CD-DA playback.
+    static const u32 k_playback_delay_us = 224000;
 };
 
 #include "cdrom_audio_inline.h"
