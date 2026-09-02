@@ -26,6 +26,12 @@
 #include "huc6280.h"
 #include "trace_logger.h"
 
+INLINE void HuC6270::TraceVdcEvent(u8 event, u8 raw, bool msb)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_VDC, event))
+        LogVdcEvent(event, raw, msb);
+}
+
 INLINE u16 HuC6270::Clock()
 {
     if (m_sat_transfer_pending > 0)
@@ -348,17 +354,7 @@ INLINE void HuC6270::RCRIRQ()
             m_status_register |= HUC6270_STATUS_SCANLINE;
             m_huc6202->AssertIRQ1(this, true);
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            if (m_trace_logger->IsEnabled(TRACE_VDC))
-            {
-                GG_Trace_Entry e = {};
-                e.type = TRACE_VDC;
-                e.vdc.event = TRACE_VDC_SCANLINE_IRQ;
-                e.vdc.value = m_register[HUC6270_REG_RCR];
-                e.vdc.chip = m_chip_id;
-                m_trace_logger->TraceLog(e);
-            }
-#endif
+            TraceVdcEvent(TRACE_VDC_SCANLINE_IRQ);
         }
     }
 }
@@ -370,16 +366,7 @@ INLINE void HuC6270::OverflowIRQ()
         m_status_register |= HUC6270_STATUS_OVERFLOW;
         m_huc6202->AssertIRQ1(this, true);
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-        if (m_trace_logger->IsEnabled(TRACE_VDC))
-        {
-            GG_Trace_Entry e = {};
-            e.type = TRACE_VDC;
-            e.vdc.event = TRACE_VDC_OVERFLOW_IRQ;
-            e.vdc.chip = m_chip_id;
-            m_trace_logger->TraceLog(e);
-        }
-#endif
+        TraceVdcEvent(TRACE_VDC_OVERFLOW_IRQ);
     }
 }
 
@@ -391,16 +378,7 @@ INLINE void HuC6270::SpriteCollisionIRQ()
         m_status_register |= HUC6270_STATUS_COLLISION;
         m_huc6202->AssertIRQ1(this, true);
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-        if (m_trace_logger->IsEnabled(TRACE_VDC))
-        {
-            GG_Trace_Entry e = {};
-            e.type = TRACE_VDC;
-            e.vdc.event = TRACE_VDC_SPRITE_COLLISION_IRQ;
-            e.vdc.chip = m_chip_id;
-            m_trace_logger->TraceLog(e);
-        }
-#endif
+        TraceVdcEvent(TRACE_VDC_SPRITE_COLLISION_IRQ);
     }
 }
 

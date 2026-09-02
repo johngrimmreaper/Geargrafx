@@ -30,6 +30,7 @@ class CdRom;
 class CdRomMedia;
 class CdRomAudio;
 class HuC6280;
+class Random;
 class TraceLogger;
 
 class ScsiController
@@ -86,7 +87,10 @@ public:
         SCSI_EVENT_SET_COMMAND_PHASE,
         SCSI_EVENT_SET_REQ_SIGNAL,
         SCSI_EVENT_SET_GOOD_STATUS,
-        SCSI_EVENT_SET_DATA_IN_PHASE
+        SCSI_EVENT_SET_DATA_IN_PHASE,
+        SCSI_EVENT_SET_MESSAGE_IN_PHASE,
+        SCSI_EVENT_SET_BUS_FREE_PHASE,
+        SCSI_EVENT_SET_RESPONSE_REQ_SIGNAL
     };
 
     enum ScsiStatus
@@ -119,7 +123,7 @@ public:
     };
 
 public:
-    ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio);
+    ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio, Random* random);
     ~ScsiController();
     void Init(HuC6280* huc6280, CdRom* cdrom);
     void Reset(bool keep_rst_signal = false);
@@ -133,6 +137,7 @@ public:
     void AutoAck();
     void StartSelection();
     void StartStatus(ScsiStatus status, u8 length = 1);
+    void AudioSeekCompleted();
     bool IsDataReady();
     Scsi_State* GetState();
     void SetTraceLogger(TraceLogger* trace_logger);
@@ -164,8 +169,13 @@ private:
     u8 CommandLength(ScsiCommand command);
     void LoadSector();
     u32 AudioLBA();
-    void TraceEvent(u8 event, u8 command = 0, u8 phase = 0, u8 status = 0, u32 param = 0);
-    void TraceProblem(u8 event, u8 problem, u8 command = 0, u32 param = 0);
+    void TraceScsiEvent(u8 event, u8 command = 0, u8 phase = 0, u8 status = 0,
+        u32 param = 0, const u8* data = NULL, u8 size = 0);
+    void LogScsiEvent(u8 event, u8 command, u8 phase, u8 status,
+        u32 param, const u8* data, u8 size);
+    void TraceScsiProblemEvent(u8 event, u8 problem, u8 command = 0, u32 param = 0,
+        u32 extra = 0);
+    void LogScsiProblemEvent(u8 event, u8 problem, u8 command, u32 param, u32 extra);
 
 private:
     Scsi_State m_state;
@@ -173,6 +183,7 @@ private:
     CdRom* m_cdrom;
     CdRomMedia* m_cdrom_media;
     CdRomAudio* m_cdrom_audio;
+    Random* m_random;
     TraceLogger* m_trace_logger;
     ScsiBus m_bus;
     ScsiPhase m_phase;
@@ -208,7 +219,9 @@ static const char* const k_scsi_event_names[] = {
     "SET COMMAND PHASE",
     "SET REQ SIGNAL",
     "SET GOOD STATUS",
-    "SET DATA IN PHASE"
+    "SET DATA IN PHASE",
+    "SET MESSAGE IN PHASE",
+    "SET BUS FREE PHASE"
 };
 
 #include "scsi_controller_inline.h"

@@ -26,6 +26,7 @@
 
 class HuC6270;
 class HuC6280;
+class TraceLogger;
 
 class HuC6202
 {
@@ -43,6 +44,13 @@ public:
         HuC6270_PRIORITY_DEFAULT = 0,
         HuC6270_PRIORITY_SPRITES_2_ABOVE_BG_1,
         HuC6270_PRIORITY_SPRITES_1_BELOW_BG_2,
+    };
+
+    enum HuC6202_Pixel_Source
+    {
+        HuC6202_SOURCE_BLACK = 0,
+        HuC6202_SOURCE_VDC_1,
+        HuC6202_SOURCE_VDC_2,
     };
 
     struct HuC6202_Window_Priority
@@ -79,18 +87,24 @@ public:
     void ProcessCpuVramAccesses(u32 cycles);
     bool HasPendingCpuVramAccess();
     void AssertIRQ1(HuC6270* vdc, bool assert);
+    void SetTraceLogger(TraceLogger* trace_logger);
     u16 GetWindow1Width();
     u16 GetWindow2Width();
     HuC6202_Window_Priority* GetWindowPriorities();
+    const u8* GetSourceSelection();
     HuC6202_State* GetState();
     void SaveState(std::ostream& stream);
     void LoadState(std::istream& stream);
 
 private:
+    void TraceVpcEvent(u8 event, u16 address, u8 raw);
+    void LogVpcEvent(u8 event, u16 address, u8 raw);
     void CalculatePriorityMode(HuC6202_Window_Mode window_mode, u8 value);
+    void CalculateSourceSelection(HuC6202_Window_Mode window_mode);
 
 private:
     HuC6280* m_huc6280;
+    TraceLogger* m_trace_logger;
     HuC6270* m_huc6270_1;
     HuC6270* m_huc6270_2;
     HuC6202_State m_state;
@@ -103,6 +117,7 @@ private:
     bool m_irq1_1;
     bool m_irq1_2;
     HuC6202_Window_Priority m_window_priority[4];
+    u8 m_source_selection[4 * 16];
 };
 
 #include "huc6202_inline.h"

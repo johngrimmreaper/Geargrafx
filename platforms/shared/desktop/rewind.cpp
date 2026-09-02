@@ -98,21 +98,30 @@ void rewind_push(void)
     if (active)
         return;
 
-    if (!ensure_storage())
-        return;
-
     frame_accum++;
     if (frame_accum < config_rewind.frames_per_snapshot)
         return;
     frame_accum = 0;
+
+    if (!ensure_storage())
+        return;
 
     u8* slot = buffer + ((size_t)head * slot_size);
     size_t size = slot_size;
 
     if (!emu_get_core()->SaveState(slot, size, true))
     {
-        Log("Rewind: failed to save snapshot into %zu-byte slot", slot_size);
-        return;
+        storage_dirty = true;
+        if (!ensure_storage())
+            return;
+
+        slot = buffer + ((size_t)head * slot_size);
+        size = slot_size;
+        if (!emu_get_core()->SaveState(slot, size, true))
+        {
+            Log("Rewind: failed to save snapshot into %zu-byte slot", slot_size);
+            return;
+        }
     }
 
     sizes[head] = size;
@@ -323,23 +332,23 @@ static void restore_screenshot(const u8* slot, size_t size)
     if (size <= sizeof(GG_SaveState_Header))
         return;
 
-    const GG_SaveState_Header* header = reinterpret_cast<const GG_SaveState_Header*>(
-        slot + size - sizeof(GG_SaveState_Header));
+    GG_SaveState_Header header;
+    memcpy(&header, slot + size - sizeof(GG_SaveState_Header), sizeof(header));
 
-    if (header->magic != GG_SAVESTATE_MAGIC)
+    if (header.magic != GG_SAVESTATE_MAGIC)
         return;
-    if (header->screenshot_size == 0)
+    if (header.screenshot_size == 0)
         return;
 
     size_t max_screenshot_size = (size_t)REWIND_SCREENSHOT_WIDTH * REWIND_SCREENSHOT_HEIGHT * 4;
-    if (header->screenshot_size > max_screenshot_size)
+    if (header.screenshot_size > max_screenshot_size)
         return;
 
-    if (header->screenshot_size > (size - sizeof(GG_SaveState_Header)))
+    if (header.screenshot_size > (size - sizeof(GG_SaveState_Header)))
         return;
 
-    size_t screenshot_offset = size - sizeof(GG_SaveState_Header) - header->screenshot_size;
+    size_t screenshot_offset = size - sizeof(GG_SaveState_Header) - header.screenshot_size;
     const u8* screenshot_data = slot + screenshot_offset;
 
-    memcpy(emu_frame_buffer, screenshot_data, header->screenshot_size);
+    memcpy(emu_frame_buffer, screenshot_data, header.screenshot_size);
 }

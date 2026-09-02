@@ -33,6 +33,7 @@
 #include "huc6280.h"
 #include "trace_logger.h"
 #include "scsi_controller.h"
+#include "random.h"
 #include "cdrom.h"
 #include "cdrom_media.h"
 #include "cdrom_audio.h"
@@ -54,12 +55,15 @@ GeargrafxCore::GeargrafxCore()
     InitPointer(m_cdrom_audio);
     InitPointer(m_adpcm);
     InitPointer(m_scsi_controller);
+    InitPointer(m_random);
     InitPointer(m_audio);
     InitPointer(m_input);
     InitPointer(m_media);
     InitPointer(m_trace_logger);
     m_paused = true;
     m_master_clock_cycles = 0;
+    m_turbolink_cycles = 0;
+    m_turbolink_next_sync_cycle = TURBOLINK_MAX_SYNC_CYCLES;
     m_frame_ready = false;
     m_mb128_mode = GG_MB128_AUTO;
 }
@@ -81,28 +85,29 @@ GeargrafxCore::~GeargrafxCore()
     SafeDelete(m_huc6260);
     SafeDelete(m_huc6202);
     SafeDelete(m_memory);
+    SafeDelete(m_random);
 }
 
 void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_format)
 {
     Log("Loading %s core %s by Ignacio Sanchez", GG_TITLE, GG_VERSION);
 
-    srand((unsigned int)time(NULL));
-
     m_cdrom_media = new CdRomMedia();
     m_media = new Media(m_cdrom_media);
-    m_huc6280 = new HuC6280();
+    m_random = new Random();
+    m_random->Seed((u32)time(NULL));
+    m_huc6280 = new HuC6280(m_random);
     m_huc6270_1 = new HuC6270(m_huc6280);
     m_huc6270_2 = new HuC6270(m_huc6280);
     m_huc6202 = new HuC6202(m_huc6270_1, m_huc6270_2, m_huc6280);
-    m_huc6260 = new HuC6260(m_huc6202, m_huc6280);
+    m_huc6260 = new HuC6260(m_huc6202, m_huc6280, m_random);
     m_input = new Input(m_media, this);
     m_adpcm = new Adpcm();
     m_cdrom_audio = new CdRomAudio(m_cdrom_media);
     m_audio = new Audio(m_adpcm, m_cdrom_audio);
-    m_scsi_controller = new ScsiController(m_cdrom_media, m_cdrom_audio);
+    m_scsi_controller = new ScsiController(m_cdrom_media, m_cdrom_audio, m_random);
     m_cdrom = new CdRom(m_cdrom_audio, m_scsi_controller, m_audio, this);
-    m_memory = new Memory(m_huc6260, m_huc6202, m_huc6280, m_media, m_input, m_audio, m_cdrom);
+    m_memory = new Memory(m_huc6260, m_huc6202, m_huc6280, m_media, m_input, m_audio, m_cdrom, m_random);
 
     m_audio->Init();
     m_input->Init();
@@ -119,7 +124,10 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_adpcm->Init(this, m_cdrom, m_scsi_controller);
     m_cdrom_audio->Init(m_cdrom, m_scsi_controller);
 
-    m_trace_logger = new TraceLogger();
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    m_trace_logger = new TraceLogger(&m_master_clock_cycles);
+    m_memory->SetTraceLogger(m_trace_logger);
+    m_huc6202->SetTraceLogger(m_trace_logger);
     m_huc6280->SetTraceLogger(m_trace_logger);
     m_huc6270_1->SetTraceLogger(m_trace_logger);
     m_huc6270_2->SetTraceLogger(m_trace_logger);
@@ -127,13 +135,15 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_audio->SetTraceLogger(m_trace_logger);
     m_input->SetTraceLogger(m_trace_logger);
     m_cdrom->SetTraceLogger(m_trace_logger);
+    m_cdrom_audio->SetTraceLogger(m_trace_logger);
     m_adpcm->SetTraceLogger(m_trace_logger);
     m_scsi_controller->SetTraceLogger(m_trace_logger);
+#endif
 }
 
-bool GeargrafxCore::LoadMedia(const char* file_path)
+bool GeargrafxCore::LoadMedia(const char* file_path, bool softpatching)
 {
-    if (m_media->LoadMedia(file_path))
+    if (m_media->LoadMedia(file_path, softpatching))
     {
         m_memory->ResetDisassemblerRecords();
         Reset();
@@ -189,6 +199,7 @@ bool GeargrafxCore::GetRuntimeInfo(GG_Runtime_Info& runtime_info)
     runtime_info.screen_width = m_huc6260->GetCurrentWidth();
     runtime_info.screen_height = m_huc6260->GetCurrentHeight();
     runtime_info.width_scale = m_huc6260->GetWidthScale();
+    runtime_info.fps = huc6260_get_frame_rate(m_huc6260->GetTotalLines());
 
     return m_media->IsReady();
 }
@@ -196,6 +207,35 @@ bool GeargrafxCore::GetRuntimeInfo(GG_Runtime_Info& runtime_info)
 TraceLogger* GeargrafxCore::GetTraceLogger()
 {
     return m_trace_logger;
+}
+
+void GeargrafxCore::SetTurboLinkCallbacks(
+    GG_TurboLink_Publish_Callback publish_callback, GG_TurboLink_Sample_Callback sample_callback,
+    GG_TurboLink_Sync_Callback sync_callback, void* user_data)
+{
+    m_input->SetTurboLinkCallbacks(publish_callback, sample_callback,
+        sync_callback, user_data);
+}
+
+void GeargrafxCore::SetTurboLinkCableConnected(bool connected)
+{
+    m_input->SetTurboLinkCableConnected(connected);
+    m_turbolink_next_sync_cycle = m_turbolink_cycles + TURBOLINK_MAX_SYNC_CYCLES;
+}
+
+void GeargrafxCore::InvalidateTurboLinkSample()
+{
+    m_input->InvalidateTurboLinkSample();
+}
+
+bool GeargrafxCore::IsTurboLinkCableConnected() const
+{
+    return m_input->IsTurboLinkCableConnected();
+}
+
+GG_TurboLink_Drive GeargrafxCore::GetTurboLinkDrive() const
+{
+    return m_input->GetTurboLinkDrive();
 }
 
 void GeargrafxCore::KeyPressed(GG_Controllers controller, GG_Keys key)
@@ -238,7 +278,7 @@ void GeargrafxCore::ResetMedia(bool preserve_ram)
     if (preserve_ram)
         m_memory->SaveRam(stream);
 
-    Log("Geargrafx RESET");
+    Log(GG_TITLE " RESET");
     Reset();
     m_huc6280->DisassembleNextOPCode();
 
@@ -249,11 +289,6 @@ void GeargrafxCore::ResetMedia(bool preserve_ram)
         stream.seekg(0, stream.beg);
         m_memory->LoadRam(stream, size);
     }
-}
-
-void GeargrafxCore::ResetSound()
-{
-    m_audio->Reset(m_media->IsCDROM());
 }
 
 void GeargrafxCore::SaveRam()
@@ -603,6 +638,7 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
         m_cdrom_audio->SaveState(stream);
         m_adpcm->SaveState(stream);
     }
+    m_random->SaveState(stream);
 
     if (stream.fail())
     {
@@ -847,6 +883,9 @@ bool GeargrafxCore::LoadState(std::istream& stream)
         m_cdrom_audio->LoadState(stream, header.version);
         m_adpcm->LoadState(stream, header.version);
     }
+
+    if (header.version >= 33)
+        m_random->LoadState(stream);
 
     if (stream.fail())
     {

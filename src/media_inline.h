@@ -53,6 +53,11 @@ inline bool Media::IsInGameDatabase()
     return m_is_in_game_database;
 }
 
+inline const char* Media::GetGameDatabaseName()
+{
+    return m_game_database_name;
+}
+
 #if defined(GG_ENABLE_PHYSICAL_CDROM)
 inline bool Media::IsPhysicalCdRom()
 {
@@ -80,12 +85,27 @@ inline bool Media::IsMB128()
     return m_is_mb128;
 }
 
-inline bool Media::IsValidBios(bool syscard)
+inline bool Media::IsSyscardBiosLoaded()
 {
-    return syscard ? m_is_valid_bios_syscard : m_is_valid_bios_gameexpress;
+    return m_is_loaded_bios_syscard;
 }
 
-inline bool Media::IsLoadedBios()
+inline bool Media::IsGameExpressBiosLoaded()
+{
+    return m_is_loaded_bios_gameexpress;
+}
+
+inline bool Media::IsSyscardBiosValid()
+{
+    return m_is_valid_bios_syscard;
+}
+
+inline bool Media::IsGameExpressBiosValid()
+{
+    return m_is_valid_bios_gameexpress;
+}
+
+inline bool Media::IsBiosReady()
 {
     return m_is_gameexpress ? m_is_loaded_bios_gameexpress : m_is_loaded_bios_syscard;
 }
@@ -123,6 +143,11 @@ inline void Media::ForceBackupRAM(bool force)
 inline bool Media::IsBackupRAMForced()
 {
     return m_force_backup_ram;
+}
+
+inline void Media::ForceGameExpress(bool force)
+{
+    m_force_gameexpress = force;
 }
 
 inline void Media::PreloadCdRom(bool enable)

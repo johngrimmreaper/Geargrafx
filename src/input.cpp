@@ -21,6 +21,7 @@
 #include "media.h"
 #include "geargrafx_core.h"
 #include "common.h"
+#include "trace_logger.h"
 
 Input::Input(Media* media, GeargrafxCore* core)
 {
@@ -66,6 +67,60 @@ void Input::SetTraceLogger(TraceLogger* trace_logger)
     m_trace_logger = trace_logger;
 }
 
+void Input::LogInputEvent(u8 event, u8 value)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_INPUT;
+    e.input.event = event;
+    e.input.value = value;
+    e.input.port = (u8)m_selected_pad;
+    if (event == TRACE_INPUT_READ)
+    {
+        if (m_turbolink.IsCableConnected() && m_clr)
+            e.input.source = TRACE_INPUT_SOURCE_TURBOLINK;
+        else if (m_mb128.IsConnected() && m_mb128.IsActive())
+            e.input.source = TRACE_INPUT_SOURCE_MB128;
+        else if (m_selected_pad >= GG_MAX_GAMEPADS)
+            e.input.source = TRACE_INPUT_SOURCE_NONE;
+        else if (m_controller_type[m_selected_pad] == GG_CONTROLLER_MOUSE)
+            e.input.source = TRACE_INPUT_SOURCE_MOUSE;
+        else
+            e.input.source = TRACE_INPUT_SOURCE_GAMEPAD;
+    }
+    e.input.state = (m_sel ? 0x01 : 0x00) |
+                    (m_clr ? 0x02 : 0x00) |
+                    (m_selected_extra_buttons ? 0x04 : 0x00);
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(value);
+#endif
+}
+
+void Input::LogTurboLinkEvent(u8 event, u8 value, u64 tick, u8 lines)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    GG_TurboLink_Drive drive = m_turbolink.GetDrive();
+    e.type = TRACE_INPUT;
+    e.input.event = event;
+    e.input.source = TRACE_INPUT_SOURCE_TURBOLINK;
+    e.input.value = value;
+    e.input.port = (u8)m_selected_pad;
+    e.input.state = (m_sel ? 0x01 : 0x00) | (m_clr ? 0x02 : 0x00);
+    e.input.link_tick = tick;
+    e.input.pull_low_mask = drive.drive_mask;
+    e.input.lines = lines & GG_TURBOLINK_LINE_MASK;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(value);
+    UNUSED(tick);
+    UNUSED(lines);
+#endif
+}
+
 void Input::Init()
 {
     Reset();
@@ -97,6 +152,7 @@ void Input::Reset()
     }
 
     m_mb128.Reset();
+    m_turbolink.Reset(m_core->GetTurboLinkCycle());
 
     WriteO(0xFF);
 }
@@ -145,6 +201,8 @@ void Input::SaveState(std::ostream& stream)
 
     if (mb128_included)
         m_mb128.SaveState(stream);
+
+    m_turbolink.SaveState(stream);
 }
 
 void Input::LoadState(std::istream& stream, int version)
@@ -192,9 +250,19 @@ void Input::LoadState(std::istream& stream, int version)
 
     if (mb128_included)
         m_mb128.LoadState(stream);
+
+    if (version >= 35)
+        m_turbolink.LoadState(stream);
+    else
+        m_turbolink.RestoreControl(m_sel, m_clr);
 }
 
 u64 Input::GetMasterClockCycles()
 {
     return m_core->GetMasterClockCycles();
+}
+
+u64 Input::GetTurboLinkCycles()
+{
+    return m_core->GetTurboLinkCycle();
 }

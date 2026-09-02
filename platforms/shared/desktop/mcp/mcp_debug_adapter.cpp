@@ -24,10 +24,13 @@
 #include "../emu.h"
 #include "../gui.h"
 #include "../gui_actions.h"
+#include "../gui_debug_constants.h"
 #include "../gui_debug_disassembler.h"
 #include "../gui_debug_memory.h"
 #include "../gui_debug_memeditor.h"
 #include "../gui_debug_rewind.h"
+#include "../gui_debug_trace_logger.h"
+#include "../trace_logger_formatter.h"
 #include "../config.h"
 #include "../events.h"
 #include "../rewind.h"
@@ -38,6 +41,96 @@
 #include <algorithm>
 
 static const int k_mcp_mouse_motion_step = 4;
+
+static bool replace_mcp_disassembly_operand(GG_Disassembler_Record* record,
+    std::string& instruction, const char* replacement)
+{
+    if (record->operand_length <= 0 || record->operand_offset < 0 ||
+        (record->operand_offset + record->operand_length) > (int)instruction.length())
+        return false;
+
+    instruction.replace(record->operand_offset, record->operand_length, replacement);
+    return true;
+}
+
+static int get_mcp_relative_displacement_index(GG_Disassembler_Record* record)
+{
+    GG_OPCode_Type type = k_huc6280_opcode_names[record->opcodes[0]].type;
+    if (type == GG_OPCode_Type_1b_Relative)
+        return 1;
+    if (type == GG_OPCode_Type_1b_1b_Relative)
+        return 2;
+    return -1;
+}
+
+static u8 get_mcp_disassembly_bank(Memory* memory, u16 address,
+    bool use_explicit_bank, u8 explicit_bank, u8 source_window)
+{
+    if (use_explicit_bank && (address >> 13) == source_window)
+        return explicit_bank;
+    return memory->GetBank(address);
+}
+
+static bool resolve_mcp_disassembly_symbol(GG_Disassembler_Record* record,
+    std::string& instruction, u16 address, bool is_zp, u8 bank)
+{
+    u16 bank_address = is_zp ? (0x2000 | address) : address;
+    DebugSymbol* symbol = gui_debug_get_symbol(bank, bank_address);
+    if (!IsValidPointer(symbol))
+        return false;
+
+    return replace_mcp_disassembly_operand(record, instruction, symbol->text);
+}
+
+static bool resolve_mcp_disassembly_label(GG_Disassembler_Record* record,
+    std::string& instruction, u16 address, bool is_zp, u8 bank)
+{
+    if (bank != 0xFF)
+        return false;
+
+    u16 label_lookup = is_zp ? (0x2000 | address) : address;
+    u16 hardware_offset = label_lookup & 0xE000;
+
+    for (int i = 0; i < k_debug_label_count; i++)
+    {
+        if (k_debug_labels[i].address + hardware_offset == label_lookup)
+        {
+            char replacement[64];
+            snprintf(replacement, sizeof(replacement), "%s_%04X",
+                k_debug_labels[i].label, address);
+            return replace_mcp_disassembly_operand(record, instruction, replacement);
+        }
+    }
+
+    return false;
+}
+
+static void format_cdrom_msf(u32 lba, char* buffer, size_t size)
+{
+    GG_CdRomMSF msf;
+    LbaToMsf(lba, &msf);
+    snprintf(buffer, size, "%02u:%02u:%02u", msf.minutes, msf.seconds, msf.frames);
+}
+
+static void format_cdrom_signed_msf(s32 lba, char* buffer, size_t size)
+{
+    if (lba < 0)
+    {
+        char msf[16];
+        format_cdrom_msf((u32)-lba, msf, sizeof(msf));
+        snprintf(buffer, size, "-%s", msf);
+    }
+    else
+        format_cdrom_msf((u32)lba, buffer, size);
+}
+
+static double cdrom_cycles_to_ms(s32 cycles)
+{
+    if (cycles <= 0)
+        return 0.0;
+
+    return (double)cycles * 1000.0 / (double)GG_MASTER_CLOCK_RATE;
+}
 
 static bool is_mouse_motion_button(const std::string& button)
 {
@@ -59,16 +152,6 @@ static void get_mouse_motion_delta(const std::string& button, int* delta_x, int*
         *delta_x = k_mcp_mouse_motion_step;
 }
 
-static std::string get_file_name_from_path(const std::string& path)
-{
-    size_t position = path.find_last_of("/\\");
-
-    if (position == std::string::npos)
-        return path;
-
-    return path.substr(position + 1);
-}
-
 struct DisassemblerBookmark
 {
     u16 address;
@@ -77,7 +160,8 @@ struct DisassemblerBookmark
 
 static bool NormalizeMemoryAreaAddress(const MemoryAreaInfo& info, u32 address, u32* offset)
 {
-    if (!IsValidPointer(offset) || !IsValidPointer(info.data) || info.size == 0)
+    bool virtual_area = info.id == MEMORY_EDITOR_LOGICAL || info.id == MEMORY_EDITOR_PHYSICAL;
+    if (!IsValidPointer(offset) || (!virtual_area && !IsValidPointer(info.data)) || info.size == 0)
         return false;
 
     if (address < info.size)
@@ -92,6 +176,15 @@ static bool NormalizeMemoryAreaAddress(const MemoryAreaInfo& info, u32 address, 
 static u32 GetMemoryAreaByteSize(const MemoryAreaInfo& info)
 {
     return info.size * info.unit_size;
+}
+
+static int GetMemoryAreaAddressDigits(const MemoryAreaInfo& info)
+{
+    int digits = 1;
+    u32 address = info.size > 0 ? info.size - 1 : 0;
+    while (address >>= 4)
+        digits++;
+    return digits;
 }
 
 void DebugAdapter::Pause()
@@ -268,7 +361,8 @@ std::vector<MemoryAreaInfo> DebugAdapter::ListMemoryAreas()
     for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
     {
         MemoryAreaInfo info = GetMemoryAreaInfo(i);
-        if (info.data != NULL && info.size > 0)
+        bool virtual_area = i == MEMORY_EDITOR_LOGICAL || i == MEMORY_EDITOR_PHYSICAL;
+        if ((info.data != NULL || virtual_area) && info.size > 0)
         {
             result.push_back(info);
         }
@@ -282,7 +376,8 @@ std::vector<u8> DebugAdapter::ReadMemoryArea(int area, u32 offset, size_t size)
     std::vector<u8> result;
     MemoryAreaInfo info = GetMemoryAreaInfo(area);
 
-    if (info.data == NULL || info.unit_size == 0 || offset >= info.size)
+    bool virtual_area = area == MEMORY_EDITOR_LOGICAL || area == MEMORY_EDITOR_PHYSICAL;
+    if ((!virtual_area && info.data == NULL) || info.unit_size == 0 || offset >= info.size)
         return result;
 
     u32 byte_offset = offset * info.unit_size;
@@ -291,29 +386,65 @@ std::vector<u8> DebugAdapter::ReadMemoryArea(int area, u32 offset, size_t size)
     u32 bytes_remaining = byte_size - byte_offset;
     if (size > bytes_remaining)
         bytes_to_read = bytes_remaining;
+    Memory* memory = virtual_area ? m_core->GetMemory() : NULL;
 
     for (u32 i = 0; i < bytes_to_read; i++)
     {
-        result.push_back(info.data[byte_offset + i]);
+        if (!virtual_area)
+        {
+            result.push_back(info.data[byte_offset + i]);
+            continue;
+        }
+
+        u32 address = byte_offset + i;
+        u8 value = 0xFF;
+
+        if (area == MEMORY_EDITOR_LOGICAL)
+            memory->TryPeek((u16)address, &value);
+        else
+            memory->TryPeek((u16)(address & 0x1FFF), (u8)(address >> 13), &value);
+
+        result.push_back(value);
     }
 
     return result;
 }
 
-void DebugAdapter::WriteMemoryArea(int area, u32 offset, const std::vector<u8>& data)
+size_t DebugAdapter::WriteMemoryArea(int area, u32 offset, const std::vector<u8>& data)
 {
     MemoryAreaInfo info = GetMemoryAreaInfo(area);
+    bool virtual_area = area == MEMORY_EDITOR_LOGICAL || area == MEMORY_EDITOR_PHYSICAL;
 
-    if (info.data == NULL || info.unit_size == 0 || offset >= info.size)
-        return;
+    if ((!virtual_area && info.data == NULL) || info.unit_size == 0 || offset >= info.size)
+        return 0;
 
     u32 byte_offset = offset * info.unit_size;
     u32 byte_size = GetMemoryAreaByteSize(info);
+    size_t bytes_written = 0;
+    Memory* memory = virtual_area ? m_core->GetMemory() : NULL;
 
     for (size_t i = 0; i < data.size() && (byte_offset + i) < byte_size; i++)
     {
-        info.data[byte_offset + i] = data[i];
+        if (!virtual_area)
+        {
+            info.data[byte_offset + i] = data[i];
+            bytes_written++;
+            continue;
+        }
+
+        u32 address = byte_offset + (u32)i;
+        bool written = false;
+
+        if (area == MEMORY_EDITOR_LOGICAL)
+            written = memory->TryPoke((u16)address, data[i]);
+        else
+            written = memory->TryPoke((u16)(address & 0x1FFF), (u8)(address >> 13), data[i]);
+
+        if (written)
+            bytes_written++;
     }
+
+    return bytes_written;
 }
 
 std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_address, int bank, bool resolve_symbols)
@@ -322,6 +453,7 @@ std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_
     Memory* memory = m_core->GetMemory();
 
     bool use_explicit_bank = (bank >= 0 && bank <= 0xFF);
+    u8 explicit_bank = use_explicit_bank ? (u8)bank : 0;
 
     // Scan backwards from to find any instruction that might span into our range
     u16 scan_start = start_address;
@@ -380,7 +512,6 @@ std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_
             line.address = (u16)addr;
             line.bank = record->bank;
             line.name = record->name;
-            strip_color_tags(line.name);
             line.bytes = record->bytes;
             line.segment = record->segment;
             line.size = record->size;
@@ -393,14 +524,89 @@ std::vector<DisasmLine> DebugAdapter::GetDisassembly(u16 start_address, u16 end_
             line.subroutine = record->subroutine;
             line.irq = record->irq;
 
-            if (resolve_symbols)
+            u8 source_window = (u16)addr >> 13;
+
+            if (line.jump)
             {
-                std::string instr = line.name;
-                if (!gui_debug_resolve_symbol(record, instr, "", ""))
-                    gui_debug_resolve_label(record, instr, "", "");
-                line.name = instr;
+                int relative_index = get_mcp_relative_displacement_index(record);
+                bool project_context = use_explicit_bank;
+                if (!use_explicit_bank && relative_index >= 0)
+                {
+                    u16 recorded_source = (u16)(record->jump_address - record->size -
+                        (s8)record->opcodes[relative_index]);
+                    project_context = line.address != recorded_source;
+                }
+
+                if (project_context && relative_index >= 0)
+                {
+                    line.jump_address = (u16)(line.address + record->size +
+                        (s8)record->opcodes[relative_index]);
+
+                    if (config_debug.dis_syntax != GG_Disassembler_Syntax_WLADX)
+                    {
+                        char target[8];
+                        snprintf(target, sizeof(target), "$%04X", line.jump_address);
+                        replace_mcp_disassembly_operand(record, line.name, target);
+                    }
+                }
+
+                if (project_context)
+                {
+                    line.jump_bank = get_mcp_disassembly_bank(memory, line.jump_address,
+                        use_explicit_bank, explicit_bank, source_window);
+                }
             }
 
+            if (resolve_symbols)
+            {
+                u16 operand_address = 0;
+                bool operand_is_zp = false;
+                u8 operand_bank = 0;
+                bool has_operand = false;
+
+                if (line.jump)
+                {
+                    operand_address = line.jump_address;
+                    operand_bank = line.jump_bank;
+                    has_operand = true;
+                }
+                else if (line.has_operand_address)
+                {
+                    operand_address = line.operand_address;
+                    operand_is_zp = line.operand_is_zp;
+                    u16 bank_address = operand_is_zp ?
+                        (0x2000 | operand_address) : operand_address;
+                    operand_bank = use_explicit_bank ?
+                        get_mcp_disassembly_bank(memory, bank_address, true,
+                            explicit_bank, source_window) : record->operand_bank;
+                    has_operand = true;
+                }
+
+                if (has_operand)
+                {
+                    bool resolved = resolve_mcp_disassembly_symbol(record, line.name,
+                        operand_address, operand_is_zp, operand_bank);
+
+                    if (!resolved)
+                    {
+                        resolved = resolve_mcp_disassembly_label(record, line.name,
+                            operand_address, operand_is_zp, operand_bank);
+                    }
+
+                    if (!resolved && line.jump)
+                    {
+                        char auto_symbol[64];
+                        if (gui_debug_get_auto_symbol(operand_bank, operand_address,
+                            line.subroutine, auto_symbol, sizeof(auto_symbol)))
+                        {
+                            resolved = replace_mcp_disassembly_operand(record,
+                                line.name, auto_symbol);
+                        }
+                    }
+                }
+            }
+
+            strip_color_tags(line.name);
             result.push_back(line);
 
             u32 next_addr;
@@ -453,7 +659,7 @@ const char* DebugAdapter::GetBreakpointTypeName(int type)
         case HuC6280::HuC6280_BREAKPOINT_TYPE_HUC6260_REGISTER:
             return "6260 REG";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_WRAM:
-            return "WRAM";
+            return "SYSTEM RAM";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_ZERO_PAGE:
             return "ZERO PAGE";
         case HuC6280::HuC6280_BREAKPOINT_TYPE_ROM:
@@ -487,8 +693,16 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
 
     switch (area)
     {
+        case MEMORY_EDITOR_LOGICAL:
+            info.name = "LOGICAL";
+            info.size = 0x10000;
+            break;
+        case MEMORY_EDITOR_PHYSICAL:
+            info.name = "PHYSICAL";
+            info.size = 0x200000;
+            break;
         case MEMORY_EDITOR_RAM:
-            info.name = "WRAM";
+            info.name = "SYSTEM RAM";
             info.data = memory->GetWorkingRAM();
             info.size = 0x2000 * (is_sgx ? 4 : 1);
             break;
@@ -674,15 +888,20 @@ json DebugAdapter::GetMediaInfo()
             break;
     }
 
-    info["loaded_bios"] = media->IsLoadedBios();
-    if (media->IsLoadedBios())
+    bool bios_ready = media->IsBiosReady();
+    info["loaded_bios"] = bios_ready;
+    if (bios_ready)
     {
-        info["bios_name"] = media->GetBiosName(true);
-        info["valid_bios"] = media->IsValidBios(true);
+        bool syscard = !media->IsGameExpress();
+        info["bios_name"] = media->GetBiosName(syscard);
+        info["valid_bios"] = syscard ? media->IsSyscardBiosValid() : media->IsGameExpressBiosValid();
     }
 
     info["backup_ram_forced"] = media->IsBackupRAMForced();
     info["preload_cdrom"] = media->IsPreloadCdRomEnabled();
+    info["softpatch_applied"] = media->IsSoftpatchApplied();
+    if (media->IsSoftpatchApplied())
+        info["softpatch_path"] = media->GetSoftpatchPath();
 
     return info;
 }
@@ -702,7 +921,7 @@ json DebugAdapter::ListRecentMedia()
         json entry;
         entry["index"] = index;
         entry["file_path"] = path;
-        entry["file_name"] = get_file_name_from_path(path);
+        entry["file_name"] = get_filename(path.c_str());
         recent_media.push_back(entry);
     }
 
@@ -1191,6 +1410,10 @@ json DebugAdapter::ListCDROMTracks()
 
     CdRomMedia* cdrom_media = m_core->GetCDROMMedia();
     const std::vector<CdRomImage::Track>& tracks = cdrom_media->GetTracks();
+    u32 current_lba = cdrom_media->GetCurrentSector();
+    s32 current_track = cdrom_media->FindTrackFromLBA(current_lba, true);
+    int audio_tracks = 0;
+    int data_tracks = 0;
 
     json result;
     json track_list = json::array();
@@ -1202,6 +1425,8 @@ json DebugAdapter::ListCDROMTracks()
 
         track["number"] = (int)(i + 1);
         track["type"] = TrackTypeName(t.type);
+        track["is_audio"] = t.type == GG_CDROM_AUDIO_TRACK;
+        track["is_current"] = (s32)i == current_track;
         track["sector_size"] = t.sector_size;
         track["start_lba"] = t.start_lba;
         track["end_lba"] = t.end_lba;
@@ -1215,16 +1440,45 @@ json DebugAdapter::ListCDROMTracks()
         snprintf(end_msf, sizeof(end_msf), "%02d:%02d:%02d", t.end_msf.minutes, t.end_msf.seconds, t.end_msf.frames);
         track["end_msf"] = end_msf;
 
+        char duration_msf[16];
+        format_cdrom_msf(t.sector_count, duration_msf, sizeof(duration_msf));
+        track["duration_msf"] = duration_msf;
+
         track["has_lead_in"] = t.has_lead_in;
         if (t.has_lead_in)
+        {
+            u32 lead_in_sectors = t.start_lba - t.lead_in_lba;
+            char lead_in_msf[16];
+            format_cdrom_msf(lead_in_sectors, lead_in_msf, sizeof(lead_in_msf));
             track["lead_in_lba"] = t.lead_in_lba;
+            track["lead_in_sectors"] = lead_in_sectors;
+            track["lead_in_msf"] = lead_in_msf;
+        }
 
         track["file_offset"] = t.file_offset;
 
         track_list.push_back(track);
+
+        if (t.type == GG_CDROM_AUDIO_TRACK)
+            audio_tracks++;
+        else
+            data_tracks++;
     }
 
+    GG_CdRomMSF total_length = cdrom_media->GetCdRomLength();
+    char total_length_msf[16];
+    snprintf(total_length_msf, sizeof(total_length_msf), "%02u:%02u:%02u",
+        total_length.minutes, total_length.seconds, total_length.frames);
+
+    result["media_name"] = cdrom_media->GetFileName();
+    result["media_type"] = cdrom_media->GetFileExtension();
     result["track_count"] = (int)tracks.size();
+    result["audio_track_count"] = audio_tracks;
+    result["data_track_count"] = data_tracks;
+    result["total_length_msf"] = total_length_msf;
+    result["sector_count"] = cdrom_media->GetSectorCount();
+    result["current_lba"] = current_lba;
+    result["current_track"] = current_track >= 0 ? current_track + 1 : 0;
     result["tracks"] = track_list;
 
     return result;
@@ -1302,8 +1556,17 @@ json DebugAdapter::GetCDROMAudioStatus()
         return json::object();
 
     json status;
+    CdRom* cdrom = m_core->GetCDROM();
+    CdRomMedia* cdrom_media = m_core->GetCDROMMedia();
     CdRomAudio* cdrom_audio = m_core->GetCDROMAudio();
     CdRomAudio::CdRomAudio_State* cdrom_audio_state = cdrom_audio->GetState();
+    u32 current_lba = *cdrom_audio_state->CURRENT_LBA;
+    s32 current_track = cdrom_media->FindTrackFromLBA(current_lba, true);
+    const std::vector<CdRomImage::Track>& tracks = cdrom_media->GetTracks();
+    const CdRomImage::Track* track = NULL;
+
+    if ((current_track >= 0) && ((size_t)current_track < tracks.size()))
+        track = &tracks[(size_t)current_track];
 
     // State
     const char* state_names[] = { "PLAYING", "IDLE", "PAUSED", "STOPPED" };
@@ -1313,23 +1576,85 @@ json DebugAdapter::GetCDROMAudioStatus()
     const char* stop_event_names[] = { "STOP", "LOOP", "IRQ" };
     status["stop_event"] = stop_event_names[*cdrom_audio_state->STOP_EVENT];
 
+    bool audio_sector = cdrom_media->IsAudioSector(current_lba);
+    bool audible = (*cdrom_audio_state->CURRENT_STATE == CdRomAudio::CD_AUDIO_STATE_PLAYING) &&
+        (*cdrom_audio_state->SEEK_CYCLES <= 0) &&
+        (*cdrom_audio_state->PLAYBACK_DELAY_CYCLES <= 0) && audio_sector;
+    const char* output_state = "SILENT";
+
+    if (*cdrom_audio_state->CURRENT_STATE == CdRomAudio::CD_AUDIO_STATE_PLAYING)
+    {
+        if (*cdrom_audio_state->SEEK_CYCLES > 0)
+            output_state = "SEEKING";
+        else if (*cdrom_audio_state->PLAYBACK_DELAY_CYCLES > 0)
+            output_state = "DELAYED";
+        else if (audio_sector)
+            output_state = "AUDIBLE";
+        else
+            output_state = "MUTED";
+    }
+
+    status["output_state"] = output_state;
+    status["audible"] = audible;
+    status["audio_sector"] = audio_sector;
+
     // LBA positions
     status["start_lba"] = *cdrom_audio_state->START_LBA;
     status["stop_lba"] = *cdrom_audio_state->STOP_LBA;
-    status["current_lba"] = *cdrom_audio_state->CURRENT_LBA;
+    status["current_lba"] = current_lba;
 
-    // Convert current LBA to MSF for display
-    GG_CdRomMSF current_msf;
-    LbaToMsf(*cdrom_audio_state->CURRENT_LBA, &current_msf);
-    char pos_str[16];
-    snprintf(pos_str, sizeof(pos_str), "%02d:%02d:%02d", current_msf.minutes, current_msf.seconds, current_msf.frames);
-    status["current_position_msf"] = pos_str;
+    char start_msf[16];
+    char stop_msf[16];
+    char current_msf[16];
+    format_cdrom_msf(*cdrom_audio_state->START_LBA, start_msf, sizeof(start_msf));
+    format_cdrom_msf(*cdrom_audio_state->STOP_LBA, stop_msf, sizeof(stop_msf));
+    format_cdrom_msf(current_lba, current_msf, sizeof(current_msf));
+    status["start_position_msf"] = start_msf;
+    status["stop_position_msf"] = stop_msf;
+    status["current_position_msf"] = current_msf;
+
+    status["current_track"] = current_track >= 0 ? current_track + 1 : 0;
+    if (IsValidPointer(track))
+    {
+        s32 track_position_lba = (s32)current_lba - (s32)track->start_lba;
+        char track_position_msf[16];
+        char track_length_msf[16];
+        format_cdrom_signed_msf(track_position_lba, track_position_msf, sizeof(track_position_msf));
+        format_cdrom_msf(track->sector_count, track_length_msf, sizeof(track_length_msf));
+
+        status["current_track_type"] = TrackTypeName(track->type);
+        status["current_track_sector_size"] = track->sector_size;
+        status["current_track_start_lba"] = track->start_lba;
+        status["current_track_end_lba"] = track->end_lba;
+        status["current_track_position_lba"] = track_position_lba;
+        status["current_track_position_msf"] = track_position_msf;
+        status["current_track_length_msf"] = track_length_msf;
+    }
 
     // Seek info
     status["seek_cycles"] = *cdrom_audio_state->SEEK_CYCLES;
+    status["seek_ms"] = cdrom_cycles_to_ms(*cdrom_audio_state->SEEK_CYCLES);
+    status["playback_delay_cycles"] = *cdrom_audio_state->PLAYBACK_DELAY_CYCLES;
+    status["playback_delay_ms"] = cdrom_cycles_to_ms(*cdrom_audio_state->PLAYBACK_DELAY_CYCLES);
 
     // Sample info
     status["frame_samples"] = *cdrom_audio_state->FRAME_SAMPLES;
+    status["frame_samples_per_channel"] = *cdrom_audio_state->FRAME_SAMPLES / 2;
+    status["current_sample"] = *cdrom_audio_state->CURRENT_SAMPLE;
+    status["samples_per_sector"] = 2352 / 4;
+    status["left_sample"] = cdrom_audio->GetLeftSample();
+    status["right_sample"] = cdrom_audio->GetRightSample();
+
+    u8 fader = *cdrom->GetState()->FADER;
+    bool fader_enabled = IS_SET_BIT(fader, 3);
+    bool fader_adpcm = IS_SET_BIT(fader, 1);
+    bool fader_cd_audio = cdrom->IsFaderEnabled(false);
+    status["fader_raw"] = fader;
+    status["fader_enabled"] = fader_enabled;
+    status["fader_applies_to_cd_audio"] = fader_cd_audio;
+    status["fader_target"] = fader_enabled ? (fader_adpcm ? "ADPCM" : "CD_AUDIO") : "NONE";
+    status["fader_speed"] = fader_enabled ? (IS_SET_BIT(fader, 2) ? "FAST" : "SLOW") : "NONE";
+    status["fader_gain"] = fader_cd_audio ? cdrom->GetFaderValue() : 1.0;
 
     return status;
 }
@@ -1384,30 +1709,6 @@ json DebugAdapter::GetADPCMStatus()
     status["frame_samples"] = *adpcm_state->FRAME_SAMPLES;
 
     return status;
-}
-
-// Base64 encoding table
-static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static std::string base64_encode(const unsigned char* data, int size)
-{
-    std::string result;
-    result.reserve(((size + 2) / 3) * 4);
-
-    int i = 0;
-    while (i < size)
-    {
-        unsigned char byte1 = data[i++];
-        unsigned char byte2 = (i < size) ? data[i++] : 0;
-        unsigned char byte3 = (i < size) ? data[i++] : 0;
-
-        result.push_back(base64_chars[byte1 >> 2]);
-        result.push_back(base64_chars[((byte1 & 0x03) << 4) | (byte2 >> 4)]);
-        result.push_back((i > size + 1) ? '=' : base64_chars[((byte2 & 0x0F) << 2) | (byte3 >> 6)]);
-        result.push_back((i > size) ? '=' : base64_chars[byte3 & 0x3F]);
-    }
-
-    return result;
 }
 
 json DebugAdapter::GetScreenshot()
@@ -1500,6 +1801,9 @@ json DebugAdapter::FinishLoadMedia(const std::string& file_path)
     result["rom_name"] = m_core->GetMedia()->GetFileName();
     result["is_cdrom"] = m_core->GetMedia()->IsCDROM();
     result["is_sgx"] = m_core->GetMedia()->IsSGX();
+    result["softpatch_applied"] = m_core->GetMedia()->IsSoftpatchApplied();
+    if (m_core->GetMedia()->IsSoftpatchApplied())
+        result["softpatch_path"] = m_core->GetMedia()->GetSoftpatchPath();
 
     return result;
 }
@@ -1527,10 +1831,12 @@ json DebugAdapter::LoadBios(const std::string& file_path, bool syscard)
     result["success"] = true;
     result["file_path"] = file_path;
     result["type"] = syscard ? "syscard" : "gameexpress";
-    result["valid_crc"] = m_core->GetMedia()->IsValidBios(syscard);
-    result["bios_name"] = m_core->GetMedia()->GetBiosName(syscard);
+    Media* media = m_core->GetMedia();
+    bool valid_crc = syscard ? media->IsSyscardBiosValid() : media->IsGameExpressBiosValid();
+    result["valid_crc"] = valid_crc;
+    result["bios_name"] = media->GetBiosName(syscard);
 
-    if (!m_core->GetMedia()->IsValidBios(syscard))
+    if (!valid_crc)
         result["warning"] = "CRC does not match any known BIOS";
 
     return result;
@@ -1645,6 +1951,13 @@ json DebugAdapter::LoadState()
         return result;
     }
 
+    if (emu_turbolink_is_active())
+    {
+        result["error"] = "State loading is unavailable while TurboLink is active";
+        Log("[MCP] LoadState failed: TurboLink is active");
+        return result;
+    }
+
     int slot = config_emulator.save_slot + 1;
 
     update_savestates_data();
@@ -1706,6 +2019,13 @@ json DebugAdapter::LoadStateFile(const std::string& file_path)
         return result;
     }
 
+    if (emu_turbolink_is_active())
+    {
+        result["error"] = "State loading is unavailable while TurboLink is active";
+        Log("[MCP] LoadStateFile failed: TurboLink is active");
+        return result;
+    }
+
     if (!m_core || !m_core->GetMedia()->IsReady())
     {
         result["error"] = "No media loaded";
@@ -1733,6 +2053,12 @@ json DebugAdapter::SetFastForwardSpeed(int speed)
 {
     json result;
 
+    if (emu_turbolink_is_active())
+    {
+        result["error"] = "Fast-forward is unavailable while TurboLink is active";
+        return result;
+    }
+
     if (speed < 0 || speed > 4)
     {
         result["error"] = "Invalid speed (must be 0-4: 0=1.5x, 1=2x, 2=2.5x, 3=3x, 4=Unlimited)";
@@ -1754,6 +2080,12 @@ json DebugAdapter::SetFastForwardSpeed(int speed)
 json DebugAdapter::ToggleFastForward(bool enabled)
 {
     json result;
+
+    if (emu_turbolink_is_active() && enabled)
+    {
+        result["error"] = "Fast-forward is unavailable while TurboLink is active";
+        return result;
+    }
 
     config_emulator.ffwd = enabled;
     gui_action_ffwd();
@@ -1888,7 +2220,158 @@ json DebugAdapter::GetInputState()
         players.push_back({{"player", player + 1}, {"pressed", pressed}});
     }
 
-    return {{"players", players}};
+    json result;
+    result["players"] = players;
+
+    return result;
+}
+
+json DebugAdapter::GetTurboLinkStatus()
+{
+    if (!m_core)
+        return {{"error", "Core unavailable"}};
+
+    Input* input = m_core->GetInput();
+    TurboLinkStatus link = emu_turbolink_get_status();
+    GG_TurboLink_Drive drive = input->GetTurboLinkDrive();
+    u8 input_base = input->GetIORegister();
+    u8 o = (input->GetSel() ? 0x01 : 0x00) | (input->GetClr() ? 0x02 : 0x00);
+    bool sample_valid = input->HasTurboLinkSample();
+    u8 lines = input->GetTurboLinkLastSampledLines();
+    u8 port_result = input->GetTurboLinkLastPortResult();
+    bool mux_active = input->IsTurboLinkCableConnected() && input->GetClr();
+    u64 cycle = m_core->GetTurboLinkCycle();
+
+    const char* mode = "disabled";
+    if (link.mode == TurboLinkModeConnected)
+        mode = "connected";
+    else if (link.mode == TurboLinkModeFault)
+        mode = "fault";
+
+    std::ostringstream ss;
+    ss << std::hex << std::uppercase << std::setfill('0');
+
+    json io_port;
+    io_port["address"] = "1000";
+    ss << std::setw(2) << (int)input_base;
+    io_port["input_base"] = ss.str();
+    ss.str("");
+    ss << std::setw(2) << (int)o;
+    io_port["output_control"] = ss.str();
+
+    json control;
+    control["sel"] = input->GetSel();
+    control["clr"] = input->GetClr();
+    control["input_source"] = mux_active ? "turbolink" : "controller";
+    control["hardware_endpoint_active"] = input->IsTurboLinkCableConnected();
+    control["pull_low_mask"] = drive.drive_mask;
+    control["link1_driver"] = (drive.drive_mask & GG_TURBOLINK_LINE_1) ? "low" : "released";
+    control["link2_driver"] = (drive.drive_mask & GG_TURBOLINK_LINE_2) ? "low" : "released";
+
+    json last_sample;
+    last_sample["valid"] = sample_valid;
+
+    if (sample_valid)
+    {
+        last_sample["tick"] = input->GetTurboLinkLastSampleTick();
+        last_sample["sel"] = input->GetTurboLinkLastSampleSel();
+        last_sample["clr"] = input->GetTurboLinkLastSampleClr();
+        last_sample["local_pull_low_mask"] = input->GetTurboLinkLastSamplePullLowMask();
+        last_sample["physical_mask"] = lines;
+        last_sample["link1"] = (lines & GG_TURBOLINK_LINE_1) ? "high" : "low";
+        last_sample["link2"] = (lines & GG_TURBOLINK_LINE_2) ? "high" : "low";
+        last_sample["d0"] = (port_result & 0x01) != 0;
+        last_sample["d1"] = (port_result & 0x02) != 0;
+        last_sample["d2"] = (port_result & 0x04) != 0;
+        last_sample["d3"] = (port_result & 0x08) != 0;
+        ss.str("");
+        ss << std::setw(2) << (int)port_result;
+        last_sample["port_result"] = ss.str();
+    }
+
+    json timing;
+    timing["link_cycle"] = cycle;
+    timing["last_o_write_tick"] = input->GetTurboLinkLastControlTick();
+    timing["last_drive_tick"] = input->GetTurboLinkLastDriveTick();
+
+    json transport;
+    transport["type"] = "shared_memory";
+    transport["mode"] = mode;
+    transport["session_active"] = link.active;
+    transport["local_hardware_ready"] = link.local_hardware_ready;
+    transport["remote_member_active"] = link.remote_active;
+    transport["remote_hardware_ready"] = link.remote_hardware_ready;
+    transport["operational_cable"] = link.cable_connected;
+    transport["endpoint"] = link.endpoint;
+    transport["last_error"] = link.last_error;
+    transport["session"] = link.session;
+    transport["local_peer_id"] = link.local_peer_id;
+    transport["remote_peer_id"] = link.remote_peer_id;
+    transport["peer_count"] = link.peer_count;
+    transport["pacing_mode"] = !link.cable_connected ? "local" : (link.pacing_peer ? "leader" : "follower");
+    transport["local_generation"] = link.local_generation;
+    transport["remote_generation"] = link.remote_generation;
+    transport["local_anchor_tick"] = link.local_anchor_tick;
+    transport["bus_anchor_tick"] = link.bus_anchor_tick;
+    transport["local_tick"] = link.local_tick;
+    transport["bus_tick"] = link.bus_tick;
+    transport["max_lead_ticks"] = TURBOLINK_MAX_LEAD_TICKS;
+    if (link.remote_hardware_ready)
+        transport["remote_commit_tick"] = link.remote_tick;
+
+    if (link.cable_connected)
+    {
+        transport["lead_ticks"] = link.lead_ticks;
+    }
+    transport["remote_heartbeat_age_us"] = link.remote_heartbeat_age_us;
+    transport["published_pull_low_mask"] = link.local_pull_low_mask;
+
+    json shared_sample;
+    shared_sample["valid"] = link.sample_valid;
+    if (link.sample_valid)
+    {
+        shared_sample["local_tick"] = link.last_sample_local_tick;
+        shared_sample["bus_tick"] = link.last_sample_bus_tick;
+        shared_sample["remote_generation"] = link.last_sample_remote_generation;
+        shared_sample["local_pull_low_mask"] = link.last_sample_local_pull_low_mask;
+        shared_sample["remote_pull_low_mask"] = link.last_sample_remote_pull_low_mask;
+        shared_sample["physical_mask"] = link.last_sampled_lines;
+    }
+    transport["last_sample"] = shared_sample;
+    transport["drive_events_published"] = link.events_published;
+    transport["line_samples"] = link.line_samples;
+    transport["sync_calls"] = link.sync_calls;
+    transport["exact_waits"] = link.exact_waits;
+    transport["barrier_waits"] = link.barrier_waits;
+    transport["barrier_wait_us"] = link.barrier_wait_us;
+    transport["barrier_wait_max_us"] = link.barrier_wait_max_us;
+    transport["barrier_wait_over_1ms"] = link.barrier_wait_over_1ms;
+    transport["barrier_wait_over_10ms"] = link.barrier_wait_over_10ms;
+    transport["barrier_wait_over_50ms"] = link.barrier_wait_over_50ms;
+    transport["spin_iterations"] = link.spin_iterations;
+    transport["sleep_calls"] = link.sleep_calls;
+    transport["sync_gap_max_us"] = link.sync_gap_max_us;
+    transport["sync_gap_over_50ms"] = link.sync_gap_over_50ms;
+    transport["history_overflows"] = link.history_overflows;
+    transport["peer_detaches"] = link.peer_detaches;
+    transport["peer_detach_max_age_us"] = link.peer_detach_max_age_us;
+    transport["slot_reclaims"] = link.slot_reclaims;
+    transport["seqlock_retries"] = link.seqlock_retries;
+    transport["attachments"] = link.attachments;
+
+    json result;
+    result["io_port"] = io_port;
+    result["control"] = control;
+    result["last_sample"] = last_sample;
+    result["timing"] = timing;
+    result["transport"] = transport;
+    return result;
+}
+
+json DebugAdapter::ResetTurboLinkMetrics()
+{
+    emu_turbolink_reset_metrics();
+    return {{"success", true}};
 }
 
 bool DebugAdapter::IsMouseController(int player) const
@@ -1939,6 +2422,12 @@ json DebugAdapter::ControllerSetType(int player, const std::string& type)
         return result;
     }
 
+    if (emu_turbolink_is_active() && controller_type != GG_CONTROLLER_STANDARD)
+    {
+        result["error"] = "Controller topology is unavailable while TurboLink is active";
+        return result;
+    }
+
     emu_set_pad_type(controller, controller_type);
 
     result["success"] = true;
@@ -1951,6 +2440,12 @@ json DebugAdapter::ControllerSetType(int player, const std::string& type)
 json DebugAdapter::ControllerSetTurboTap(bool enabled)
 {
     json result;
+
+    if (emu_turbolink_is_active() && enabled)
+    {
+        result["error"] = "Turbo Tap is unavailable while TurboLink is active";
+        return result;
+    }
 
     emu_set_turbo_tap(enabled);
 
@@ -2252,12 +2747,13 @@ json DebugAdapter::SelectMemoryRange(int editor, int start_address, int end_addr
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
     MemoryAreaInfo info = GetMemoryAreaInfo(editor);
-    if (!IsValidPointer(info.data) || info.size == 0)
+    bool virtual_area = editor == MEMORY_EDITOR_LOGICAL || editor == MEMORY_EDITOR_PHYSICAL;
+    if ((!virtual_area && !IsValidPointer(info.data)) || info.size == 0)
     {
         result["error"] = "Memory area unavailable";
         return result;
@@ -2291,8 +2787,9 @@ json DebugAdapter::SelectMemoryRange(int editor, int start_address, int end_addr
     }
 
     std::ostringstream start_ss, end_ss;
-    start_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << (u32)actual_start;
-    end_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << (u32)actual_end;
+    int address_digits = GetMemoryAreaAddressDigits(info);
+    start_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << (u32)actual_start;
+    end_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << (u32)actual_end;
 
     result["success"] = true;
     result["area"] = editor;
@@ -2314,15 +2811,16 @@ json DebugAdapter::SetMemorySelectionValue(int editor, u8 value)
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
-    gui_debug_memory_set_selection_value(editor, value);
+    int values_written = gui_debug_memory_set_selection_value(editor, value);
 
-    result["success"] = true;
+    result["success"] = values_written > 0;
     result["editor"] = editor;
     result["value"] = value;
+    result["values_written"] = values_written;
 
     return result;
 }
@@ -2339,7 +2837,7 @@ json DebugAdapter::AddMemoryBookmark(int editor, int address, const std::string&
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
@@ -2365,7 +2863,7 @@ json DebugAdapter::RemoveMemoryBookmark(int editor, int address)
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
@@ -2390,7 +2888,7 @@ json DebugAdapter::AddMemoryWatch(int editor, int address, const std::string& no
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
@@ -2429,7 +2927,7 @@ json DebugAdapter::RemoveMemoryWatch(int editor, int address)
 
     if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid editor number (must be 0-13)";
+        result["error"] = "Invalid editor number";
         return result;
     }
 
@@ -2661,6 +3159,7 @@ json DebugAdapter::ListMemoryBookmarks(int area)
 
     void* bookmarks_ptr = NULL;
     int count = gui_debug_memory_get_bookmarks(area, &bookmarks_ptr);
+    int address_digits = GetMemoryAreaAddressDigits(GetMemoryAreaInfo(area));
 
     std::vector<MemEditor::Bookmark>* bookmarks = (std::vector<MemEditor::Bookmark>*)bookmarks_ptr;
 
@@ -2673,7 +3172,7 @@ json DebugAdapter::ListMemoryBookmarks(int area)
             json bookmark_obj;
 
             std::ostringstream addr_ss;
-            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << bookmark.address;
+            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << bookmark.address;
             bookmark_obj["address"] = addr_ss.str();
             bookmark_obj["name"] = bookmark.name;
 
@@ -2706,6 +3205,7 @@ json DebugAdapter::ListMemoryWatches(int area)
 
     void* watches_ptr = NULL;
     int count = gui_debug_memory_get_watches(area, &watches_ptr);
+    int address_digits = GetMemoryAreaAddressDigits(GetMemoryAreaInfo(area));
 
     std::vector<MemEditor::Watch>* watches = (std::vector<MemEditor::Watch>*)watches_ptr;
 
@@ -2721,7 +3221,7 @@ json DebugAdapter::ListMemoryWatches(int area)
             json watch_obj;
 
             std::ostringstream addr_ss;
-            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << watch.address;
+            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << watch.address;
             watch_obj["address"] = addr_ss.str();
             watch_obj["notes"] = watch.notes;
 
@@ -2760,14 +3260,15 @@ json DebugAdapter::GetMemorySelection(int area)
     int start = -1;
     int end = -1;
     gui_debug_memory_get_selection(area, &start, &end);
+    int address_digits = GetMemoryAreaAddressDigits(GetMemoryAreaInfo(area));
 
     result["area"] = area;
 
     if (start >= 0 && end >= 0 && start <= end)
     {
         std::ostringstream start_ss, end_ss;
-        start_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << start;
-        end_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << end;
+        start_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << start;
+        end_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << end;
 
         result["selected"] = true;
         result["start"] = start_ss.str();
@@ -2795,7 +3296,7 @@ json DebugAdapter::MemorySearchCapture(int area)
 
     if (area < 0 || area >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid area number (must be 0-13)";
+        result["error"] = "Invalid area number";
         return result;
     }
 
@@ -2819,7 +3320,7 @@ json DebugAdapter::MemorySearch(int area, const std::string& op, const std::stri
 
     if (area < 0 || area >= MEMORY_EDITOR_MAX)
     {
-        result["error"] = "Invalid area number (must be 0-13)";
+        result["error"] = "Invalid area number";
         return result;
     }
 
@@ -2871,6 +3372,7 @@ json DebugAdapter::MemorySearch(int area, const std::string& op, const std::stri
 
     void* results_ptr = NULL;
     int count = gui_debug_memory_search(area, op_index, compare_type_index, compare_value, data_type_index, &results_ptr);
+    int address_digits = GetMemoryAreaAddressDigits(GetMemoryAreaInfo(area));
 
     result["area"] = area;
     result["count"] = count;
@@ -2889,7 +3391,7 @@ json DebugAdapter::MemorySearch(int area, const std::string& op, const std::stri
             json item = json::array();
 
             std::ostringstream addr_ss;
-            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << search.address;
+            addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << search.address;
 
             item.push_back(addr_ss.str());
             item.push_back(search.value);
@@ -2907,7 +3409,7 @@ json DebugAdapter::MemorySearch(int area, const std::string& op, const std::stri
     return result;
 }
 
-json DebugAdapter::MemoryFindBytes(int area, const std::string& hex_bytes)
+json DebugAdapter::MemoryFind(int area, const std::string& value, bool text, bool case_sensitive)
 {
     json result;
 
@@ -2923,14 +3425,24 @@ json DebugAdapter::MemoryFindBytes(int area, const std::string& hex_bytes)
         return result;
     }
 
-    if (hex_bytes.empty())
+    if (value.empty())
     {
-        result["error"] = "Empty hex byte string";
+        result["error"] = text ? "text is empty" : "hex_bytes is empty";
         return result;
     }
 
     int addresses[100];
-    int count = gui_debug_memory_find_bytes(area, hex_bytes.c_str(), addresses, 100);
+    int count = gui_debug_memory_find(area, value.c_str(), text, case_sensitive, addresses, 100);
+    int address_digits = GetMemoryAreaAddressDigits(GetMemoryAreaInfo(area));
+
+    if (count < 0)
+    {
+        if (text)
+            result["error"] = "text must not exceed 512 bytes";
+        else
+            result["error"] = "hex_bytes must contain valid hex byte pairs";
+        return result;
+    }
 
     result["area"] = area;
     result["count"] = count;
@@ -2941,7 +3453,7 @@ json DebugAdapter::MemoryFindBytes(int area, const std::string& hex_bytes)
     for (int i = 0; i < max_results; i++)
     {
         std::ostringstream addr_ss;
-        addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << addresses[i];
+        addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(address_digits) << addresses[i];
         result["addresses"].push_back(addr_ss.str());
     }
 
@@ -2953,7 +3465,7 @@ json DebugAdapter::MemoryFindBytes(int area, const std::string& hex_bytes)
     return result;
 }
 
-json DebugAdapter::GetTraceLog(int start, int count)
+json DebugAdapter::GetTraceLog(s64 start, int count)
 {
     json result;
 
@@ -2964,256 +3476,81 @@ json DebugAdapter::GetTraceLog(int start, int count)
         return result;
     }
 
-    u32 total = tl->GetCount();
+    u32 retained = tl->GetCount();
+    u64 total = tl->GetSequence();
+    u64 oldest = total - retained;
 
     if (count < 1) count = 100;
     if (count > 1000) count = 1000;
 
-    u32 actual_start;
+    u64 actual_start;
+    bool overrun = false;
     if (start < 0)
-        actual_start = (total > (u32)count) ? (total - (u32)count) : 0;
+    {
+        u64 tail = (u64)(-(start + 1)) + 1;
+        actual_start = (total - oldest > tail) ? (total - tail) : oldest;
+    }
     else
-        actual_start = (u32)start;
+    {
+        actual_start = (u64)start;
+        if (actual_start < oldest)
+        {
+            actual_start = oldest;
+            overrun = true;
+        }
+    }
 
     if (actual_start >= total)
     {
-        result["total_entries"] = total;
+        result["total_entries"] = retained;
+        result["total_logged"] = total;
+        result["oldest_sequence"] = oldest;
         result["start"] = actual_start;
+        result["next_sequence"] = actual_start;
         result["count"] = 0;
+        result["overrun"] = overrun;
         result["lines"] = json::array();
         return result;
     }
 
     u32 actual_count = (u32)count;
-    if (actual_start + actual_count > total)
-        actual_count = total - actual_start;
-
-    Memory* memory = m_core->GetMemory();
+    if ((u64)actual_count > total - actual_start)
+        actual_count = (u32)(total - actual_start);
+    u32 buffer_start = (u32)(actual_start - oldest);
 
     json lines = json::array();
     for (u32 i = 0; i < actual_count; i++)
     {
-        const GG_Trace_Entry& entry = tl->GetEntry(actual_start + i);
-        char buf[256];
+        const GG_Trace_Entry& entry = tl->GetEntry(buffer_start + i);
+        char buf[GG_TRACE_FORMAT_BUFFER_SIZE];
 
-        switch (entry.type)
-        {
-            case TRACE_CPU:
-            {
-                GG_Disassembler_Record* record = memory->GetDisassemblerRecord(entry.cpu.pc, entry.cpu.bank);
-                char instr[64] = "???";
-                char bytes[25] = "";
-                if (IsValidPointer(record))
-                {
-                    strncpy(instr, record->name, sizeof(instr) - 1);
-                    instr[sizeof(instr) - 1] = '\0';
-                    char* p = instr;
-                    while (*p)
-                    {
-                        if (*p == '{')
-                        {
-                            char* end = strchr(p, '}');
-                            if (end)
-                                memmove(p, end + 1, strlen(end + 1) + 1);
-                            else
-                                break;
-                        }
-                        else
-                            p++;
-                    }
-                    strncpy(bytes, record->bytes, sizeof(bytes) - 1);
-                    bytes[sizeof(bytes) - 1] = '\0';
-                }
-                u8 p = entry.cpu.p;
-                snprintf(buf, sizeof(buf), "%02X:%04X  A:%02X X:%02X Y:%02X S:%02X  %c%c%c%c%c%c%c%c  %-26s %s",
-                         entry.cpu.bank, entry.cpu.pc, entry.cpu.a, entry.cpu.x, entry.cpu.y, entry.cpu.s,
-                         (p & FLAG_NEGATIVE) ? 'N' : 'n', (p & FLAG_OVERFLOW) ? 'V' : 'v',
-                         (p & FLAG_TRANSFER) ? 'T' : 't', (p & FLAG_BREAK) ? 'B' : 'b',
-                         (p & FLAG_DECIMAL) ? 'D' : 'd', (p & FLAG_INTERRUPT) ? 'I' : 'i',
-                         (p & FLAG_ZERO) ? 'Z' : 'z', (p & FLAG_CARRY) ? 'C' : 'c',
-                         instr, bytes);
-                break;
-            }
-            case TRACE_CPU_IRQ:
-            {
-                const char* irq_name = "???";
-                if (entry.irq.vector == 0xFFFA) irq_name = "TIQ";
-                else if (entry.irq.vector == 0xFFF8) irq_name = "IRQ1";
-                else if (entry.irq.vector == 0xFFF6) irq_name = "IRQ2";
-                snprintf(buf, sizeof(buf), "  [CPU]  IRQ       %s  PC:$%04X  Vector:$%04X  Mask:%02X",
-                         irq_name, entry.irq.pc, entry.irq.vector, entry.irq.irq_mask);
-                break;
-            }
-            case TRACE_VDC:
-            {
-                static const char* k_vdc_reg_names[] = {
-                    "MAWR", "MARR", "VWR", "???", "???", "CR", "RCR", "BXR",
-                    "BYR", "MWR", "HSR", "HDR", "VSR", "VDR", "VCR", "DCR",
-                    "SOUR", "DESR", "LENR", "DVSSR"
-                };
-                const char* chip_name = entry.vdc.chip == 0 ? "VDC1" : "VDC2";
-                switch (entry.vdc.event)
-                {
-                    case TRACE_VDC_REG_WRITE:
-                    {
-                        const char* reg_name = entry.vdc.reg < 20 ? k_vdc_reg_names[entry.vdc.reg] : "???";
-                        snprintf(buf, sizeof(buf), "  [%s]  REG       %s($%02X)=$%04X",
-                                 chip_name, reg_name, entry.vdc.reg, entry.vdc.value);
-                        break;
-                    }
-                    case TRACE_VDC_VBLANK_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  VBLANK    IRQ", chip_name);
-                        break;
-                    case TRACE_VDC_SCANLINE_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  SCANLINE  IRQ  RCR=%d", chip_name, entry.vdc.value);
-                        break;
-                    case TRACE_VDC_OVERFLOW_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  OVERFLOW  IRQ", chip_name);
-                        break;
-                    case TRACE_VDC_SPRITE_COLLISION_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  SPRITE    COLLISION IRQ", chip_name);
-                        break;
-                    case TRACE_VDC_SATB_DMA_END_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  SATB DMA  END IRQ", chip_name);
-                        break;
-                    case TRACE_VDC_VRAM_DMA_END_IRQ:
-                        snprintf(buf, sizeof(buf), "  [%s]  VRAM DMA  END IRQ", chip_name);
-                        break;
-                    case TRACE_VDC_VRAM_DMA_START:
-                        snprintf(buf, sizeof(buf), "  [%s]  VRAM DMA  START", chip_name);
-                        break;
-                    case TRACE_VDC_SATB_DMA_START:
-                        snprintf(buf, sizeof(buf), "  [%s]  SATB DMA  START  DVSSR=$%04X", chip_name, entry.vdc.value);
-                        break;
-                    default:
-                        snprintf(buf, sizeof(buf), "  [%s]  ???", chip_name);
-                        break;
-                }
-                break;
-            }
-            case TRACE_INPUT:
-                snprintf(buf, sizeof(buf), "  [INPUT] PORT %d  Data:$%02X",
-                         entry.input.port, entry.input.value);
-                break;
-            case TRACE_TIMER:
-                snprintf(buf, sizeof(buf), "  [TIMER] IRQ     Counter:%02X  Reload:%02X",
-                         entry.timer.counter, entry.timer.reload);
-                break;
-            case TRACE_CDROM:
-            {
-                switch (entry.cdrom.event)
-                {
-                    case TRACE_CDROM_IRQ:
-                        snprintf(buf, sizeof(buf), "  [CDROM] IRQ     Type:%02X  Active:%02X  Enabled:%02X",
-                                 entry.cdrom.irq_type, entry.cdrom.active, entry.cdrom.enabled);
-                        break;
-                    case TRACE_CDROM_FADER:
-                    {
-                        u8 v = entry.cdrom.irq_type;
-                        snprintf(buf, sizeof(buf), "  [CDROM] FADER    %s  %s  %s",
-                                 IS_SET_BIT(v, 3) ? "ON" : "OFF",
-                                 IS_SET_BIT(v, 1) ? "ADPCM" : "CD",
-                                 IS_SET_BIT(v, 2) ? "FAST" : "SLOW");
-                        break;
-                    }
-                    case TRACE_CDROM_RESET:
-                        snprintf(buf, sizeof(buf), "  [CDROM] RESET    $%02X", entry.cdrom.irq_type);
-                        break;
-                    default:
-                        snprintf(buf, sizeof(buf), "  [CDROM] ???");
-                        break;
-                }
-                break;
-            }
-            case TRACE_PSG:
-                snprintf(buf, sizeof(buf), "  [PSG]   CH %d    Reg:$%02X=$%02X",
-                         entry.psg.channel, entry.psg.reg, entry.psg.value);
-                break;
-            case TRACE_ADPCM:
-                snprintf(buf, sizeof(buf), "  [ADPCM] REG     $%02X=$%02X",
-                         entry.adpcm.reg, entry.adpcm.value);
-                break;
-            case TRACE_VCE:
-            {
-                switch (entry.vce.event)
-                {
-                    case TRACE_VCE_CONTROL_WRITE:
-                    {
-                        static const char* k_speed_names[] = { "5.36MHz", "7.16MHz", "10.8MHz", "10.8MHz" };
-                        u8 speed = entry.vce.value & 0x03;
-                        snprintf(buf, sizeof(buf), "  [VCE]  CONTROL   Speed:%s  Blur:%d  B&W:%d",
-                                 k_speed_names[speed],
-                                 (entry.vce.value >> 2) & 1,
-                                 (entry.vce.value >> 7) & 1);
-                        break;
-                    }
-                    case TRACE_VCE_COLOR_WRITE:
-                        snprintf(buf, sizeof(buf), "  [VCE]  COLOR     Addr:$%03X=$%03X",
-                                 entry.vce.reg, entry.vce.value & 0x1FF);
-                        break;
-                    case TRACE_VCE_VSYNC_START:
-                        snprintf(buf, sizeof(buf), "  [VCE]  VSYNC     START  Line:%d", entry.vce.value);
-                        break;
-                    case TRACE_VCE_VSYNC_END:
-                        snprintf(buf, sizeof(buf), "  [VCE]  VSYNC     END    Line:%d", entry.vce.value);
-                        break;
-                    default:
-                        snprintf(buf, sizeof(buf), "  [VCE]  ???");
-                        break;
-                }
-                break;
-            }
-            case TRACE_SCSI:
-            {
-                static const char* k_scsi_cmd_names[] = {
-                    "TEST_UNIT_READY", NULL, NULL, "REQUEST_SENSE",
-                    NULL, NULL, NULL, NULL, "READ"
-                };
-                switch (entry.scsi.event)
-                {
-                    case TRACE_SCSI_COMMAND:
-                    {
-                        const char* cmd_name = NULL;
-                        if (entry.scsi.command < 9)
-                            cmd_name = k_scsi_cmd_names[entry.scsi.command];
-                        else if (entry.scsi.command == 0xD8) cmd_name = "AUDIO_START";
-                        else if (entry.scsi.command == 0xD9) cmd_name = "AUDIO_STOP";
-                        else if (entry.scsi.command == 0xDA) cmd_name = "AUDIO_PAUSE";
-                        else if (entry.scsi.command == 0xDD) cmd_name = "READ_SUBCODE_Q";
-                        else if (entry.scsi.command == 0xDE) cmd_name = "READ_TOC";
-                        if (cmd_name)
-                        {
-                            if (entry.scsi.command == 0x08)
-                                snprintf(buf, sizeof(buf), "  [SCSI] CMD      %s  LBA:%u", cmd_name, entry.scsi.param);
-                            else
-                                snprintf(buf, sizeof(buf), "  [SCSI] CMD      %s", cmd_name);
-                        }
-                        else
-                            snprintf(buf, sizeof(buf), "  [SCSI] CMD      $%02X", entry.scsi.command);
-                        break;
-                    }
-                    default:
-                        snprintf(buf, sizeof(buf), "  [SCSI] ???");
-                        break;
-                }
-                break;
-            }
-            default:
-                snprintf(buf, sizeof(buf), "  [???]");
-                break;
-        }
-
+        GG_Trace_Format_Options options = {};
+        options.bank = true;
+        options.registers = true;
+        options.flags = true;
+        options.bytes = true;
+        options.cycles = true;
+        options.previous_cycle_valid = (buffer_start + i) > 0;
+        options.previous_cycle = options.previous_cycle_valid ?
+            tl->GetEntry(buffer_start + i - 1).cycle : 0;
+        trace_logger_format_entry(entry, options, buf, sizeof(buf));
         lines.push_back(buf);
     }
 
-    result["total_entries"] = total;
+    result["total_entries"] = retained;
+    result["total_logged"] = total;
+    result["oldest_sequence"] = oldest;
     result["start"] = actual_start;
+    result["next_sequence"] = actual_start + actual_count;
     result["count"] = actual_count;
+    result["overrun"] = overrun;
     result["lines"] = lines;
     return result;
 }
 
-json DebugAdapter::SetTraceLog(bool enabled, u32 flags)
+json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& output,
+    const std::string& memory_size, const std::string& disk_size,
+    const std::string& output_path, const u32* event_filters)
 {
     json result;
 
@@ -3226,29 +3563,154 @@ json DebugAdapter::SetTraceLog(bool enabled, u32 flags)
 
     if (enabled)
     {
-        if (flags == 0)
-            flags = TRACE_FLAG_CPU;
+        bool was_enabled = gui_debug_trace_logger_is_enabled();
+        int output_value;
+        if (output.empty())
+            output_value = was_enabled ? config_debug.trace_output : gui_TraceOutput_Memory;
+        else if (output == "memory")
+            output_value = gui_TraceOutput_Memory;
+        else if (output == "disk")
+            output_value = gui_TraceOutput_Disk;
+        else
+        {
+            result["error"] = "Invalid trace output";
+            return result;
+        }
 
-        tl->SetEnabledFlags(flags);
+        int memory_size_value = config_debug.trace_capacity;
+        if (!memory_size.empty())
+        {
+            memory_size_value = gui_debug_trace_logger_memory_size_index(memory_size.c_str());
+            if (memory_size_value < 0)
+            {
+                result["error"] = "Invalid trace memory size";
+                return result;
+            }
+        }
+
+        int disk_size_value = config_debug.trace_disk_size;
+        if (!disk_size.empty())
+        {
+            disk_size_value = gui_debug_trace_logger_disk_size_index(disk_size.c_str());
+            if (disk_size_value < 0)
+            {
+                result["error"] = "Invalid trace disk size";
+                return result;
+            }
+        }
+
+        bool configuration_changed = output_value != config_debug.trace_output;
+        if (output_value == gui_TraceOutput_Memory)
+            configuration_changed = configuration_changed || memory_size_value != config_debug.trace_capacity;
+        else
+        {
+            configuration_changed = configuration_changed || disk_size_value != config_debug.trace_disk_size;
+            if (!output_path.empty())
+            {
+                configuration_changed = configuration_changed ||
+                    config_debug.trace_disk_dir_option != Directory_Location_Custom ||
+                    output_path != config_debug.trace_disk_path;
+            }
+        }
+
+        if (was_enabled && configuration_changed && !gui_debug_trace_logger_stop())
+        {
+            result["error"] = "Unable to stop trace logger cleanly";
+            return result;
+        }
+
+        if (!gui_debug_trace_logger_is_enabled())
+        {
+            if (!gui_debug_trace_logger_configure(output_value, memory_size_value, disk_size_value, output_path.c_str()))
+            {
+                result["error"] = "Unable to configure trace logger";
+                return result;
+            }
+        }
+
+        gui_debug_trace_logger_set_event_filters(event_filters);
+
+        if (!gui_debug_trace_logger_start(flags))
+        {
+            result["error"] = "Unable to start trace logger";
+            return result;
+        }
 
         result["status"] = "started";
-        result["enabled_flags"] = flags;
+        result["output"] = config_debug.trace_output == gui_TraceOutput_Disk ? "disk" : "memory";
+        result["memory_size"] = gui_debug_trace_logger_memory_size_name(config_debug.trace_capacity);
+        result["disk_size"] = gui_debug_trace_logger_disk_size_name(config_debug.trace_disk_size);
+        if (config_debug.trace_output == gui_TraceOutput_Disk)
+            result["output_path"] = gui_debug_trace_logger_get_output_path();
 
-        json enabled_list = json::array();
-        if (flags & TRACE_FLAG_CPU) enabled_list.push_back("cpu");
-        if (flags & TRACE_FLAG_CPU_IRQ) enabled_list.push_back("cpu_irq");
-        if (flags & TRACE_FLAG_VDC) enabled_list.push_back("vdc");
-        if (flags & TRACE_FLAG_INPUT) enabled_list.push_back("input");
-        if (flags & TRACE_FLAG_TIMER) enabled_list.push_back("timer");
-        if (flags & TRACE_FLAG_CDROM) enabled_list.push_back("cdrom");
-        if (flags & TRACE_FLAG_PSG) enabled_list.push_back("psg");
-        if (flags & TRACE_FLAG_ADPCM) enabled_list.push_back("adpcm");
-        if (flags & TRACE_FLAG_VCE) enabled_list.push_back("vce");
-        if (flags & TRACE_FLAG_SCSI) enabled_list.push_back("scsi");
-        result["enabled"] = enabled_list;
+        u32 enabled_flags = tl->GetEnabledFlags();
+        json event_filter_list = json::array();
+        if (enabled_flags & TRACE_FLAG_CPU) event_filter_list.push_back("cpu.instructions");
+        if (enabled_flags & TRACE_FLAG_CPU_IRQ) event_filter_list.push_back("cpu.irqs");
+        u32 vdc = (enabled_flags & TRACE_FLAG_VDC) ? tl->GetEventFilter(TRACE_VDC) : 0;
+        u32 input = (enabled_flags & TRACE_FLAG_INPUT) ? tl->GetEventFilter(TRACE_INPUT) : 0;
+        u32 timer = (enabled_flags & TRACE_FLAG_TIMER) ? tl->GetEventFilter(TRACE_TIMER) : 0;
+        u32 cdrom = (enabled_flags & TRACE_FLAG_CDROM) ? tl->GetEventFilter(TRACE_CDROM) : 0;
+        u32 psg = (enabled_flags & TRACE_FLAG_PSG) ? tl->GetEventFilter(TRACE_PSG) : 0;
+        u32 adpcm = (enabled_flags & TRACE_FLAG_ADPCM) ? tl->GetEventFilter(TRACE_ADPCM) : 0;
+        u32 vce = (enabled_flags & TRACE_FLAG_VCE) ? tl->GetEventFilter(TRACE_VCE) : 0;
+        u32 scsi = (enabled_flags & TRACE_FLAG_SCSI) ? tl->GetEventFilter(TRACE_SCSI) : 0;
+        u32 system = (enabled_flags & TRACE_FLAG_SYSTEM) ? tl->GetEventFilter(TRACE_SYSTEM) : 0;
+        if ((vdc & TRACE_VDC_FILTER_REGISTERS) == TRACE_VDC_FILTER_REGISTERS) event_filter_list.push_back("vdc.registers");
+        if ((vdc & TRACE_VDC_FILTER_IRQS) == TRACE_VDC_FILTER_IRQS) event_filter_list.push_back("vdc.irqs");
+        if ((vdc & TRACE_VDC_FILTER_DMA) == TRACE_VDC_FILTER_DMA) event_filter_list.push_back("vdc.dma");
+        if ((vce & TRACE_VCE_FILTER_REGISTERS) == TRACE_VCE_FILTER_REGISTERS) event_filter_list.push_back("vce.registers");
+        if ((vce & TRACE_VCE_FILTER_TIMING) == TRACE_VCE_FILTER_TIMING) event_filter_list.push_back("vce.timing");
+        if ((input & TRACE_INPUT_FILTER_READS) != 0) event_filter_list.push_back("input.reads");
+        if ((input & TRACE_INPUT_FILTER_WRITES) != 0) event_filter_list.push_back("input.writes");
+        if ((input & TRACE_INPUT_FILTER_TURBOLINK) == TRACE_INPUT_FILTER_TURBOLINK)
+        {
+            event_filter_list.push_back("input.turbolink");
+        }
+        else
+        {
+            if ((input & TRACE_INPUT_FILTER_TURBOLINK_WRITES) != 0)
+                event_filter_list.push_back("input.turbolink.writes");
+            if ((input & TRACE_INPUT_FILTER_TURBOLINK_DRIVE) != 0)
+                event_filter_list.push_back("input.turbolink.drive");
+            if ((input & TRACE_INPUT_FILTER_TURBOLINK_SAMPLES) != 0)
+                event_filter_list.push_back("input.turbolink.samples");
+            if ((input & TRACE_INPUT_FILTER_TURBOLINK_CABLE) != 0)
+                event_filter_list.push_back("input.turbolink.cable");
+        }
+        if ((timer & TRACE_TIMER_FILTER_IRQS) != 0) event_filter_list.push_back("timer.irqs");
+        if ((timer & TRACE_TIMER_FILTER_REGISTERS) == TRACE_TIMER_FILTER_REGISTERS) event_filter_list.push_back("timer.registers");
+        if ((cdrom & TRACE_CDROM_FILTER_IRQS) == TRACE_CDROM_FILTER_IRQS) event_filter_list.push_back("cdrom.irqs");
+        if ((cdrom & TRACE_CDROM_FILTER_CONTROL) == TRACE_CDROM_FILTER_CONTROL) event_filter_list.push_back("cdrom.control");
+        if ((cdrom & TRACE_CDROM_FILTER_AUDIO) == TRACE_CDROM_FILTER_AUDIO) event_filter_list.push_back("cdrom.audio");
+        if ((psg & TRACE_PSG_FILTER_GLOBAL) == TRACE_PSG_FILTER_GLOBAL) event_filter_list.push_back("psg.global_lfo");
+        if ((psg & TRACE_PSG_FILTER_FREQUENCY) == TRACE_PSG_FILTER_FREQUENCY) event_filter_list.push_back("psg.frequency");
+        if ((psg & TRACE_PSG_FILTER_CHANNEL) == TRACE_PSG_FILTER_CHANNEL) event_filter_list.push_back("psg.channel");
+        if ((psg & TRACE_PSG_FILTER_WAVE) != 0) event_filter_list.push_back("psg.wave_dda");
+        if ((psg & TRACE_PSG_FILTER_NOISE) != 0) event_filter_list.push_back("psg.noise");
+        if ((adpcm & TRACE_ADPCM_FILTER_REGISTERS) != 0) event_filter_list.push_back("adpcm.registers");
+        if ((adpcm & TRACE_ADPCM_FILTER_DMA) != 0) event_filter_list.push_back("adpcm.dma");
+        if ((adpcm & TRACE_ADPCM_FILTER_PLAYBACK) == TRACE_ADPCM_FILTER_PLAYBACK) event_filter_list.push_back("adpcm.playback");
+        if ((adpcm & TRACE_ADPCM_FILTER_TRANSFERS) == TRACE_ADPCM_FILTER_TRANSFERS) event_filter_list.push_back("adpcm.transfers");
+        if ((adpcm & TRACE_ADPCM_FILTER_IRQS) == TRACE_ADPCM_FILTER_IRQS) event_filter_list.push_back("adpcm.irqs");
+        if ((scsi & TRACE_SCSI_FILTER_COMMANDS) != 0) event_filter_list.push_back("scsi.commands");
+        if ((scsi & TRACE_SCSI_FILTER_PHASES) != 0) event_filter_list.push_back("scsi.phases");
+        if ((scsi & TRACE_SCSI_FILTER_RESPONSES) == TRACE_SCSI_FILTER_RESPONSES) event_filter_list.push_back("scsi.responses");
+        if ((scsi & TRACE_SCSI_FILTER_RESPONSE_BYTES) != 0) event_filter_list.push_back("scsi.response_bytes");
+        if ((scsi & TRACE_SCSI_FILTER_TRANSFERS) != 0) event_filter_list.push_back("scsi.transfers");
+        if ((scsi & TRACE_SCSI_FILTER_PROBLEMS) == TRACE_SCSI_FILTER_PROBLEMS) event_filter_list.push_back("scsi.problems");
+        if ((system & TRACE_SYSTEM_FILTER_MPR) != 0) event_filter_list.push_back("system.mpr");
+        if ((system & TRACE_SYSTEM_FILTER_MAPPER) != 0) event_filter_list.push_back("system.mapper");
+        if ((system & TRACE_SYSTEM_FILTER_INTERRUPTS) == TRACE_SYSTEM_FILTER_INTERRUPTS) event_filter_list.push_back("system.interrupts");
+        result["filters"] = event_filter_list;
     }
     else
     {
+        if (!gui_debug_trace_logger_stop())
+        {
+            result["error"] = "Unable to stop trace logger cleanly";
+            return result;
+        }
         tl->SetEnabledFlags(0);
         result["status"] = "stopped";
     }
@@ -3275,6 +3737,9 @@ json DebugAdapter::GetRewindStatus()
 
 json DebugAdapter::RewindSeek(int snapshot)
 {
+    if (emu_turbolink_is_active())
+        return {{"error", "Rewind is unavailable while TurboLink is active"}};
+
     bool paused = emu_is_paused() || emu_is_debug_idle();
 
     if (!paused)

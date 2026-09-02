@@ -25,8 +25,27 @@
 #include "cdrom_audio.h"
 #include "trace_logger.h"
 
+INLINE void Audio::TracePsgEvent(u32 address, u8 value)
+{
+    if (IsValidPointer(m_trace_logger) &&
+        m_trace_logger->IsEventEnabled(TRACE_PSG, (u8)(address & 0x0F)))
+        LogPsgEvent(address, value);
+}
+
 INLINE void Audio::Clock(u32 cycles)
 {
+    if (cycles == 0)
+        return;
+
+    u64 sample_clock_counter = m_sample_clock_counter + (u64)cycles * GG_AUDIO_SAMPLE_RATE;
+
+    if (sample_clock_counter < GG_MASTER_CLOCK_RATE)
+    {
+        ClockSources(cycles);
+        m_sample_clock_counter = sample_clock_counter;
+        return;
+    }
+
     while (cycles > 0)
     {
         u32 step = cycles;
@@ -71,21 +90,16 @@ INLINE void Audio::SampleSources()
         m_adpcm->Sample();
         m_cdrom_audio->Sample();
     }
+
+#ifndef GG_DISABLE_VGMRECORDER
+    if (m_vgm_recording_enabled)
+        m_vgm_recorder.UpdateTiming();
+#endif
 }
 
 INLINE void Audio::WritePSG(u32 address, u8 value)
 {
-#if !defined(GG_DISABLE_DISASSEMBLER)
-    if (m_trace_logger->IsEnabled(TRACE_PSG))
-    {
-        GG_Trace_Entry e = {};
-        e.type = TRACE_PSG;
-        e.psg.channel = *m_psg->GetState()->CHANNEL_SELECT;
-        e.psg.reg = (u8)(address & 0x0F);
-        e.psg.value = value;
-        m_trace_logger->TraceLog(e);
-    }
-#endif
+    TracePsgEvent(address, value);
     m_psg->Write(address, value);
 #ifndef GG_DISABLE_VGMRECORDER
     if (m_vgm_recording_enabled)

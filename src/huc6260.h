@@ -33,6 +33,7 @@
 
 class HuC6202;
 class HuC6280;
+class Random;
 class TraceLogger;
 
 class HuC6260
@@ -65,7 +66,7 @@ public:
     };
 
 public:
-    HuC6260(HuC6202* huc6202, HuC6280* huc6280);
+    HuC6260(HuC6202* huc6202, HuC6280* huc6280, Random* random);
     ~HuC6260();
     void Init(GG_Pixel_Format pixel_format = GG_PIXEL_RGBA8888);
     void Reset();
@@ -96,6 +97,8 @@ public:
     void LoadState(std::istream& stream);
 
 private:
+    void TraceVceEvent(u8 event);
+    void LogVceEvent(u8 event);
     void InitPalettes();
     void AdjustForMultipleDividers();
     template <bool is_sgx>
@@ -113,6 +116,7 @@ private:
 private:
     HuC6202* m_huc6202;
     HuC6280* m_huc6280;
+    Random* m_random;
     TraceLogger* m_trace_logger;
     HuC6260_State m_state;
     u8 m_control_register;
@@ -153,6 +157,11 @@ private:
     float m_lowpass_cutoff_mhz;
     bool m_lowpass_speed[3];
 };
+
+INLINE double huc6260_get_frame_rate(int total_lines)
+{
+    return (double)GG_MASTER_CLOCK_RATE / ((double)HUC6260_LINE_LENGTH * total_lines);
+}
 
 static const HuC6260::HuC6260_Speed k_huc6260_speed[4] = {
     HuC6260::HuC6260_SPEED_5_36_MHZ, HuC6260::HuC6260_SPEED_7_16_MHZ,

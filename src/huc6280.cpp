@@ -24,10 +24,13 @@
 #include <assert.h>
 #include "huc6280.h"
 #include "memory.h"
+#include "random.h"
+#include "trace_logger.h"
 
-HuC6280::HuC6280()
+HuC6280::HuC6280(Random* random)
 {
-    InitOPCodeFunctors();
+    m_random = random;
+    InitOPCodeTable();
     InitPointer(m_trace_logger);
     InitPointer(m_clock_hardware_fn);
     InitPointer(m_clock_hardware_context);
@@ -77,6 +80,109 @@ void HuC6280::SetTraceLogger(TraceLogger* trace_logger)
     m_trace_logger = trace_logger;
 }
 
+void HuC6280::LogCpuEvent()
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    if (m_transfer_state != 0)
+        return;
+
+    GG_Trace_Entry e = {};
+    e.type = TRACE_CPU;
+    e.cpu.pc = m_PC.GetValue();
+    e.cpu.bank = m_memory->GetBank(e.cpu.pc);
+    e.cpu.a = m_A.GetValue();
+    e.cpu.x = m_X.GetValue();
+    e.cpu.y = m_Y.GetValue();
+    e.cpu.s = m_S.GetValue();
+    e.cpu.p = m_P.GetValue();
+
+    u8 opcode;
+    if (m_memory->TryPeek(e.cpu.pc, &opcode))
+    {
+        e.cpu.size = k_huc6280_opcode_sizes[opcode];
+        for (u8 i = 0; i < e.cpu.size; i++)
+        {
+            if (!m_memory->TryPeek(e.cpu.pc + i, &e.cpu.opcodes[i]))
+            {
+                e.cpu.size = i;
+                break;
+            }
+        }
+    }
+
+    GG_Disassembler_Record* record = m_memory->GetDisassemblerRecord(e.cpu.pc, e.cpu.bank);
+    if (IsValidPointer(record))
+        strncpy_fit(e.cpu.name, record->name, sizeof(e.cpu.name));
+
+    m_trace_logger->TraceLog(e);
+#endif
+}
+
+void HuC6280::LogCpuIrqEvent(u16 pc, u16 vector)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_CPU_IRQ;
+    e.irq.pc = pc;
+    e.irq.vector = vector;
+    e.irq.irq_mask = m_interrupt_disable_register;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(pc);
+    UNUSED(vector);
+#endif
+}
+
+void HuC6280::LogTimerEvent(u8 event, u8 value)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_TIMER;
+    e.timer.event = event;
+    e.timer.value = value;
+    e.timer.counter = m_timer_counter;
+    e.timer.reload = m_timer_reload;
+    e.timer.enabled = m_timer_enabled ? 1 : 0;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(value);
+#endif
+}
+
+void HuC6280::LogSystemInterruptEvent(u8 event, u16 address, u8 raw)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_SYSTEM;
+    e.system.event = event;
+    e.system.address = address;
+    e.system.raw = raw;
+    u8 mask = m_interrupt_disable_register;
+    u8 request = m_interrupt_request_register;
+    if (event == TRACE_SYSTEM_IRQ_MASK_WRITE)
+    {
+        e.system.old_value = mask;
+        mask = raw & 0x07;
+        e.system.new_value = mask;
+    }
+    else
+    {
+        e.system.old_value = request;
+        request = UNSET_BIT(request, 2);
+        e.system.new_value = request;
+    }
+    e.system.mask = mask;
+    e.system.request = request;
+    e.system.state = request & ~mask & 0x07;
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(address);
+    UNUSED(raw);
+#endif
+}
+
 void HuC6280::Reset()
 {
     m_PC.SetLow(m_memory->Read(0xFFFE));
@@ -86,11 +192,12 @@ void HuC6280::Reset()
 
     if (m_reset_value < 0)
     {
-        m_A.SetValue(rand() & 0xFF);
-        m_X.SetValue(rand() & 0xFF);
-        m_Y.SetValue(rand() & 0xFF);
-        m_S.SetValue(rand() & 0xFF);
-        m_P.SetValue(rand() & 0xFF);
+        u32 rnd = m_random->Next();
+        m_A.SetValue((u8)rnd);
+        m_X.SetValue((u8)(rnd >> 8));
+        m_Y.SetValue((u8)(rnd >> 16));
+        m_S.SetValue((u8)(rnd >> 24));
+        m_P.SetValue(m_random->Next8Bit());
     }
     else
     {

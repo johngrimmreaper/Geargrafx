@@ -26,6 +26,13 @@
 
 bool g_mcp_router_enabled = false;
 
+static void add_trace_event_filter(u32* flags, u32* event_filters,
+    GG_Trace_Type type, u32 filter)
+{
+    *flags |= 1U << type;
+    event_filters[type] |= filter;
+}
+
 void McpServer::ReaderLoop()
 {
     while (m_running.load())
@@ -311,8 +318,8 @@ void McpServer::HandleInitialize(const json& request)
         }},
         {"serverInfo", {
             {"name", "geargrafx-mcp-server"},
-            {"title", "Geargrafx MCP Server"},
-            {"description", "Debug/control Geargrafx PC Engine/TurboGrafx-16: execution, breakpoints, memory, HuC6280 CPU, HuC6270 VDC, HuC6260 VCE, PSG, CD-ROM/SCSI, ADPCM, Arcade Card, sprites, save states, rewind, input, screenshots."},
+            {"title", GG_TITLE " MCP Server"},
+            {"description", "Debug/control " GG_TITLE " PC Engine/TurboGrafx-16: execution, breakpoints, memory, HuC6280 CPU, HuC6270 VDC, HuC6260 VCE, PSG, CD-ROM/SCSI, ADPCM, Arcade Card, TurboLink, sprites, save states, rewind, input, screenshots."},
             {"version", GG_VERSION}
         }}
     };
@@ -320,7 +327,7 @@ void McpServer::HandleInitialize(const json& request)
     response["result"]["instructions"] =
         "Use this server for PC Engine and TurboGrafx-16 game debugging, reverse engineering, memory "
         "inspection, HuC6280 tracing, breakpoints, VDC, VCE, PSG, CD-ROM/SCSI, ADPCM, Arcade Card, "
-        "sprites, save states, rewind, input, and screenshots.";
+        "TurboLink, sprites, save states, rewind, input, and screenshots.";
 
     if (g_mcp_router_enabled)
     {
@@ -404,7 +411,7 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "debug_step_frame"},
         {"title", "Debug Step Frame"},
-        {"description", "Run one or more video frames to VBlank."},
+        {"description", "Run one or more video frames to VBlank. Default mode is async; use mode sync to wait until all requested frames complete."},
         {"annotations", {{"readOnlyHint", false}, {"destructiveHint", true}, {"idempotentHint", false}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -414,6 +421,11 @@ json McpServer::BuildToolList()
                     {"description", "Number of frames to step. Default 1."},
                     {"minimum", 1},
                     {"maximum", 1000}
+                }},
+                {"mode", {
+                    {"type", "string"},
+                    {"description", "async returns after scheduling; sync waits until all requested frames complete. Default async."},
+                    {"enum", json::array({"async", "sync"})}
                 }}
             }},
             {"additionalProperties", false}
@@ -448,7 +460,7 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "set_breakpoint"},
         {"title", "Set Breakpoint"},
-        {"description", "Add execute/read/write breakpoint at CPU address (logical ROM/RAM), VRAM, palette, VDC, VCE, WRAM, ROM, Card RAM or CD RAM address."},
+        {"description", "Add execute/read/write breakpoint at CPU address (logical ROM/RAM), VRAM, palette, VDC, VCE, SYSTEM RAM, ROM, Card RAM or CD RAM address."},
         {"annotations", {{"readOnlyHint", false}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -459,8 +471,8 @@ json McpServer::BuildToolList()
                 }},
                 {"memory_area", {
                     {"type", "string"},
-                    {"description", "Memory area: cpu_addr (default), rom_ram, vram, palette, huc6270_reg, huc6260_reg, wram, rom, zp, card_ram, cd_ram, backup_ram"},
-                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "zp", "palette", "huc6270_reg", "huc6260_reg", "wram", "rom", "card_ram", "cd_ram", "backup_ram"})}
+                    {"description", "Memory area: cpu_addr (default), rom_ram, vram, palette, huc6270_reg, huc6260_reg, system_ram, rom, zp, card_ram, cd_ram, backup_ram"},
+                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "zp", "palette", "huc6270_reg", "huc6260_reg", "system_ram", "rom", "card_ram", "cd_ram", "backup_ram"})}
                 }},
                 {"read", {
                     {"type", "boolean"},
@@ -497,8 +509,8 @@ json McpServer::BuildToolList()
                 }},
                 {"memory_area", {
                     {"type", "string"},
-                    {"description", "Memory area: cpu_addr, rom_ram, vram, palette, huc6270_reg, huc6260_reg, wram, zp, rom, card_ram, cd_ram, backup_ram"},
-                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "palette", "huc6270_reg", "huc6260_reg", "wram", "zp", "rom", "card_ram", "cd_ram", "backup_ram"})}
+                    {"description", "Memory area: cpu_addr, rom_ram, vram, palette, huc6270_reg, huc6260_reg, system_ram, zp, rom, card_ram, cd_ram, backup_ram"},
+                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "palette", "huc6270_reg", "huc6260_reg", "system_ram", "zp", "rom", "card_ram", "cd_ram", "backup_ram"})}
                 }},
                 {"read", {
                     {"type", "boolean"},
@@ -535,8 +547,8 @@ json McpServer::BuildToolList()
                 }},
                 {"memory_area", {
                     {"type", "string"},
-                    {"description", "Memory area: cpu_addr (default), rom_ram, vram, palette, huc6270_reg, huc6260_reg, wram, zp, rom, card_ram, cd_ram, backup_ram"},
-                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "palette", "huc6270_reg", "huc6260_reg", "wram", "zp", "rom", "card_ram", "cd_ram", "backup_ram"})}
+                    {"description", "Memory area: cpu_addr (default), rom_ram, vram, palette, huc6270_reg, huc6260_reg, system_ram, zp, rom, card_ram, cd_ram, backup_ram"},
+                    {"enum", json::array({"cpu_addr", "rom_ram", "vram", "palette", "huc6270_reg", "huc6260_reg", "system_ram", "zp", "rom", "card_ram", "cd_ram", "backup_ram"})}
                 }}
             }},
             {"required", json::array({"address"})}
@@ -559,7 +571,8 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "list_memory_areas"},
         {"title", "List Memory Areas"},
-        {"description", "List memory spaces/tabs: WRAM, VRAM, palette, ROM banks; returns area IDs, sizes in addressable units, unit sizes, and byte sizes."},
+        {"description", "List memory spaces/tabs, including logical CPU and physical bus views; "
+            "returns area IDs, sizes in addressable units, unit sizes, and byte sizes."},
         {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -659,15 +672,21 @@ json McpServer::BuildToolList()
                 }},
                 {"bank", {
                     {"type", "string"},
-                    {"description", "Optional bank 00-FF; overrides MPR mapping: (bank << 13) | (address & 0x1FFF)."}
+                    {"description",
+                        "Optional physical bank 00-FF for the requested 8KB CPU window; "
+                        "other windows use current MPR mappings."}
                 }},
                 {"resolve_symbols", {
                     {"type", "boolean"},
-                    {"description", "Resolve operands to symbols/hardware labels; non-jump operands use current MPR map. Default false."}
+                    {"description",
+                        "Resolve operands to symbols, automatic symbols, and hardware labels "
+                        "using the request's effective bank context. Default false."}
                 }},
                 {"detailed", {
                     {"type", "boolean"},
-                    {"description", "Include opcode bytes, jump targets, IRQ metadata. Default false compact output."}
+                    {"description",
+                        "Include opcode bytes, jump targets and banks, IRQ metadata. "
+                        "Default false compact output."}
                 }}
             }},
             {"required", json::array({"start_address", "end_address"})}
@@ -822,7 +841,7 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "list_cdrom_tracks"},
         {"title", "List CD-ROM Tracks"},
-        {"description", "List CD-ROM tracks: type, LBA range, sectors, lead-in, file offset."},
+        {"description", "Read the CD-ROM TOC summary and tracks: type, MSF/LBA ranges, duration, sectors, lead-in, file offset, and current track."},
         {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -846,7 +865,7 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "get_cdrom_audio_status"},
         {"title", "Get CD-ROM Audio Status"},
-        {"description", "Read CD-ROM audio playback state: track, LBA, status, volume, mode."},
+        {"description", "Read CD-ROM audio playback: output state, track-relative position, seek and playback timing, samples, and fader."},
         {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -1183,11 +1202,34 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "get_input_state"},
         {"title", "Get Input State"},
-        {"description", "Get effective pressed buttons and pending tap releases."},
+        {"description", "Get effective pressed buttons and current controller input state."},
         {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
             {"properties", json::object()},
+            {"additionalProperties", false}
+        }}
+    });
+
+    tools.push_back({
+        {"name", "get_turbolink_status"},
+        {"title", "Get TurboLink Status"},
+        {"description", "Read PC Engine GT BU5782K control, actual sampled K/line state, "
+            "event timing, and TurboLink session, readiness, pacing, barrier, and recovery diagnostics."},
+        {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
+        {"inputSchema", {
+            {"type", "object"},
+            {"additionalProperties", false}
+        }}
+    });
+
+    tools.push_back({
+        {"name", "reset_turbolink_metrics"},
+        {"title", "Reset TurboLink Metrics"},
+        {"description", "Reset TurboLink transport and stall diagnostics."},
+        {"annotations", {{"readOnlyHint", false}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
+        {"inputSchema", {
+            {"type", "object"},
             {"additionalProperties", false}
         }}
     });
@@ -1716,9 +1758,9 @@ json McpServer::BuildToolList()
     });
 
     tools.push_back({
-        {"name", "memory_find_bytes"},
-        {"title", "Find Byte Sequence in Memory"},
-        {"description", "Find consecutive hex byte sequence in memory; return addresses."},
+        {"name", "memory_find"},
+        {"title", "Find Bytes or Text in Memory"},
+        {"description", "Find consecutive hex bytes or text in memory; return addresses."},
         {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -1729,10 +1771,27 @@ json McpServer::BuildToolList()
                 }},
                 {"hex_bytes", {
                     {"type", "string"},
-                    {"description", "Hex byte pairs to find, e.g. '04E5FF32' (spaces optional)"}
+                    {"description", "Hex byte pairs to find, e.g. '04E5FF32' (spaces optional). "
+                        "Use either hex_bytes or text."},
+                    {"minLength", 1}
+                }},
+                {"text", {
+                    {"type", "string"},
+                    {"description", "UTF-8 text to find. Use either text or hex_bytes."},
+                    {"minLength", 1}
+                }},
+                {"case_sensitive", {
+                    {"type", "boolean"},
+                    {"description", "Match text case. Default true; false folds ASCII letters. "
+                        "Ignored for hex_bytes."}
                 }}
             }},
-            {"required", json::array({"area", "hex_bytes"})}
+            {"required", json::array({"area"})},
+            {"oneOf", json::array({
+                {{"required", json::array({"hex_bytes"})}},
+                {{"required", json::array({"text"})}}
+            })},
+            {"additionalProperties", false}
         }}
     });
 
@@ -1746,8 +1805,7 @@ json McpServer::BuildToolList()
             {"properties", {
                 {"start", {
                     {"type", "integer"},
-                    {"description", "Start index (0=oldest, omit for latest)"},
-                    {"minimum", 0}
+                    {"description", "Absolute trace sequence, or a negative value to read that many entries from the retained tail (omit for latest 100)"}
                 }},
                 {"count", {
                     {"type", "integer"},
@@ -1763,7 +1821,7 @@ json McpServer::BuildToolList()
     tools.push_back({
         {"name", "set_trace_log"},
         {"title", "Set Trace Logger"},
-        {"description", "Enable/disable trace log; CPU always traced; filter IRQ, VDC/VCE, input, timer, CD-ROM/SCSI, PSG, ADPCM."},
+        {"description", "Enable/disable trace logging to memory or disk; configure capacity, file limit, output directory, and event filters."},
         {"annotations", {{"readOnlyHint", false}, {"destructiveHint", true}, {"idempotentHint", true}, {"openWorldHint", false}}},
         {"inputSchema", {
             {"type", "object"},
@@ -1772,41 +1830,47 @@ json McpServer::BuildToolList()
                     {"type", "boolean"},
                     {"description", "true starts logging, false stops; preserves entries."}
                 }},
-                {"cpu_irq", {
-                    {"type", "boolean"},
-                    {"description", "Trace IRQ events (default true)"}
+                {"output", {
+                    {"type", "string"},
+                    {"description", "Trace destination. Defaults to memory when starting a stopped logger."},
+                    {"enum", json::array({"memory", "disk"})}
                 }},
-                {"vdc", {
-                    {"type", "boolean"},
-                    {"description", "Trace VDC events (default true)"}
+                {"memory_size", {
+                    {"type", "string"},
+                    {"description", "Maximum entries retained in memory mode."},
+                    {"enum", json::array({"100K", "500K", "1M", "2M", "5M"})}
                 }},
-                {"input", {
-                    {"type", "boolean"},
-                    {"description", "Trace input reads (default true)"}
+                {"disk_size", {
+                    {"type", "string"},
+                    {"description", "Maximum disk trace file size."},
+                    {"enum", json::array({"10MB", "50MB", "100MB", "250MB", "500MB", "1GB", "unbounded"})}
                 }},
-                {"timer", {
-                    {"type", "boolean"},
-                    {"description", "Trace timer IRQ events (default true)"}
+                {"output_path", {
+                    {"type", "string"},
+                    {"description", "Directory for the automatically named disk trace file."}
                 }},
-                {"cdrom", {
-                    {"type", "boolean"},
-                    {"description", "Trace CD-ROM events (default true)"}
-                }},
-                {"psg", {
-                    {"type", "boolean"},
-                    {"description", "Trace PSG audio register writes (default true)"}
-                }},
-                {"adpcm", {
-                    {"type", "boolean"},
-                    {"description", "Trace ADPCM events (default true)"}
-                }},
-                {"vce", {
-                    {"type", "boolean"},
-                    {"description", "Trace VCE events (default true)"}
-                }},
-                {"scsi", {
-                    {"type", "boolean"},
-                    {"description", "Trace SCSI events (default true)"}
+                {"filters", {
+                    {"type", "array"},
+                    {"description", "Exact event streams to record. Defaults to CPU instructions and IRQs."},
+                    {"items", {
+                        {"type", "string"},
+                        {"enum", json::array({
+                            "cpu.instructions", "cpu.irqs",
+                            "vdc.registers", "vdc.irqs", "vdc.dma",
+                            "vce.registers", "vce.timing",
+                            "input.reads", "input.writes", "input.turbolink",
+                            "input.turbolink.writes", "input.turbolink.drive",
+                            "input.turbolink.samples", "input.turbolink.cable",
+                            "timer.irqs", "timer.registers",
+                            "cdrom.irqs", "cdrom.control", "cdrom.audio",
+                            "psg.global_lfo", "psg.frequency", "psg.channel", "psg.wave_dda", "psg.noise",
+                            "adpcm.registers", "adpcm.dma", "adpcm.playback", "adpcm.transfers", "adpcm.irqs",
+                            "scsi.commands", "scsi.phases", "scsi.responses", "scsi.response_bytes", "scsi.transfers", "scsi.problems",
+                            "system.mpr", "system.mapper", "system.interrupts"
+                        })}
+                    }},
+                    {"minItems", 1},
+                    {"uniqueItems", true}
                 }}
             }},
             {"required", json::array({"enabled"})},
@@ -2169,7 +2233,7 @@ static bool GetBreakpointTypeFromString(const std::string& memory_area, int& typ
         return true;
     }
 
-    if (memory_area == "wram")
+    if (memory_area == "system_ram")
     {
         type = HuC6280::HuC6280_BREAKPOINT_TYPE_WRAM;
         return true;
@@ -2353,7 +2417,7 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
             return {{"error", "Invalid frames value (must be 1-1000)"}};
 
         m_debugAdapter.StepFrame(frames);
-        return {{"success", true}, {"frames", frames}};
+        return {{"success", true}, {"mode", "async"}, {"pending", true}, {"frames", frames}};
     }
     else if (normalizedTool == "debug_reset")
     {
@@ -2549,8 +2613,8 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
             data.push_back(byte);
         }
 
-        m_debugAdapter.WriteMemoryArea(area, offset, data);
-        return {{"success", true}, {"area", area}, {"offset", offsetStr}, {"bytes_written", data.size()}};
+        size_t bytes_written = m_debugAdapter.WriteMemoryArea(area, offset, data);
+        return {{"success", bytes_written > 0}, {"area", area}, {"offset", offsetStr}, {"bytes_written", bytes_written}};
     }
     // Registers
     else if (normalizedTool == "write_huc6280_register")
@@ -2617,7 +2681,7 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
             for (const DisasmLine& line : lines)
             {
                 json instr;
-                std::ostringstream addr_ss, bank_ss, jump_ss;
+                std::ostringstream addr_ss, bank_ss, jump_ss, jump_bank_ss;
 
                 addr_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << line.address;
                 bank_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << (int)line.bank;
@@ -2631,8 +2695,12 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
 
                 if (line.jump)
                 {
-                    jump_ss << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << line.jump_address;
+                    jump_ss << std::hex << std::uppercase << std::setfill('0') <<
+                        std::setw(4) << line.jump_address;
+                    jump_bank_ss << std::hex << std::uppercase << std::setfill('0') <<
+                        std::setw(2) << (int)line.jump_bank;
                     instr["jump_target"] = jump_ss.str();
+                    instr["jump_bank"] = jump_bank_ss.str();
                     instr["is_subroutine"] = line.subroutine;
                 }
 
@@ -2830,6 +2898,14 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
     else if (normalizedTool == "get_input_state")
     {
         return m_debugAdapter.GetInputState();
+    }
+    else if (normalizedTool == "get_turbolink_status")
+    {
+        return m_debugAdapter.GetTurboLinkStatus();
+    }
+    else if (normalizedTool == "reset_turbolink_metrics")
+    {
+        return m_debugAdapter.ResetTurboLinkMetrics();
     }
     else if (normalizedTool == "controller_macro")
     {
@@ -3031,40 +3107,153 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
         std::string data_type = arguments.value("data_type", "unsigned");
         return m_debugAdapter.MemorySearch(area, op, compare_type, compare_value, data_type);
     }
-    else if (normalizedTool == "memory_find_bytes")
+    else if (normalizedTool == "memory_find")
     {
         if (!arguments.contains("area") || !arguments["area"].is_number_integer())
             return {{"error", "area is required"}};
-        if (!arguments.contains("hex_bytes") || !arguments["hex_bytes"].is_string())
-            return {{"error", "hex_bytes is required"}};
+        if (arguments.contains("hex_bytes") && !arguments["hex_bytes"].is_string())
+            return {{"error", "hex_bytes must be a string"}};
+        if (arguments.contains("text") && !arguments["text"].is_string())
+            return {{"error", "text must be a string"}};
+        if (arguments.contains("case_sensitive") && !arguments["case_sensitive"].is_boolean())
+            return {{"error", "case_sensitive must be a boolean"}};
+
+        bool has_hex_bytes = arguments.contains("hex_bytes");
+        bool has_text = arguments.contains("text");
+        if (has_hex_bytes == has_text)
+            return {{"error", "Exactly one of hex_bytes or text is required"}};
 
         int area = arguments["area"].get<int>();
-        std::string hex_bytes = arguments["hex_bytes"].get<std::string>();
-        return m_debugAdapter.MemoryFindBytes(area, hex_bytes);
+        std::string value;
+        if (has_text)
+            value = arguments["text"].get<std::string>();
+        else
+            value = arguments["hex_bytes"].get<std::string>();
+        bool case_sensitive = arguments.value("case_sensitive", true);
+        return m_debugAdapter.MemoryFind(area, value, has_text, case_sensitive);
     }
     else if (normalizedTool == "get_trace_log")
     {
-        int start = arguments.value("start", -1);
+        s64 start = arguments.value("start", (s64)-100);
         int count = arguments.value("count", 100);
         return m_debugAdapter.GetTraceLog(start, count);
     }
     else if (normalizedTool == "set_trace_log")
     {
         bool enabled = arguments["enabled"];
-        u32 flags = TRACE_FLAG_CPU;
+        u32 flags = TRACE_FLAG_CPU | TRACE_FLAG_CPU_IRQ;
+        u32 event_filters[TRACE_TYPE_COUNT] = {};
+        event_filters[TRACE_VDC] = TRACE_VDC_FILTER_ALL;
+        event_filters[TRACE_INPUT] = TRACE_INPUT_FILTER_ALL;
+        event_filters[TRACE_TIMER] = TRACE_TIMER_FILTER_ALL;
+        event_filters[TRACE_CDROM] = TRACE_CDROM_FILTER_ALL;
+        event_filters[TRACE_PSG] = TRACE_PSG_FILTER_ALL;
+        event_filters[TRACE_ADPCM] = TRACE_ADPCM_FILTER_ALL;
+        event_filters[TRACE_VCE] = TRACE_VCE_FILTER_ALL;
+        event_filters[TRACE_SCSI] = TRACE_SCSI_FILTER_ALL;
+        event_filters[TRACE_SYSTEM] = TRACE_SYSTEM_FILTER_ALL;
         if (enabled)
         {
-            if (arguments.value("cpu_irq", true)) flags |= TRACE_FLAG_CPU_IRQ;
-            if (arguments.value("vdc", true)) flags |= TRACE_FLAG_VDC;
-            if (arguments.value("input", true)) flags |= TRACE_FLAG_INPUT;
-            if (arguments.value("timer", true)) flags |= TRACE_FLAG_TIMER;
-            if (arguments.value("cdrom", true)) flags |= TRACE_FLAG_CDROM;
-            if (arguments.value("psg", true)) flags |= TRACE_FLAG_PSG;
-            if (arguments.value("adpcm", true)) flags |= TRACE_FLAG_ADPCM;
-            if (arguments.value("vce", true)) flags |= TRACE_FLAG_VCE;
-            if (arguments.value("scsi", true)) flags |= TRACE_FLAG_SCSI;
+            if (arguments.contains("filters"))
+            {
+                flags = 0;
+                for (int i = 0; i < TRACE_TYPE_COUNT; i++)
+                    event_filters[i] = 0;
+                const json& filters = arguments["filters"];
+                for (json::const_iterator it = filters.begin(); it != filters.end(); ++it)
+                {
+                    std::string filter = it->get<std::string>();
+                    if (filter == "cpu.instructions") flags |= TRACE_FLAG_CPU;
+                    else if (filter == "cpu.irqs") flags |= TRACE_FLAG_CPU_IRQ;
+                    else if (filter == "vdc.registers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_VDC, TRACE_VDC_FILTER_REGISTERS);
+                    else if (filter == "vdc.irqs")
+                        add_trace_event_filter(&flags, event_filters, TRACE_VDC, TRACE_VDC_FILTER_IRQS);
+                    else if (filter == "vdc.dma")
+                        add_trace_event_filter(&flags, event_filters, TRACE_VDC, TRACE_VDC_FILTER_DMA);
+                    else if (filter == "vce.registers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_VCE, TRACE_VCE_FILTER_REGISTERS);
+                    else if (filter == "vce.timing")
+                        add_trace_event_filter(&flags, event_filters, TRACE_VCE, TRACE_VCE_FILTER_TIMING);
+                    else if (filter == "input.reads")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT, TRACE_INPUT_FILTER_READS);
+                    else if (filter == "input.writes")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT, TRACE_INPUT_FILTER_WRITES);
+                    else if (filter == "input.turbolink")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT, TRACE_INPUT_FILTER_TURBOLINK);
+                    else if (filter == "input.turbolink.writes")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT,
+                            TRACE_INPUT_FILTER_TURBOLINK_WRITES);
+                    else if (filter == "input.turbolink.drive")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT,
+                            TRACE_INPUT_FILTER_TURBOLINK_DRIVE);
+                    else if (filter == "input.turbolink.samples")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT,
+                            TRACE_INPUT_FILTER_TURBOLINK_SAMPLES);
+                    else if (filter == "input.turbolink.cable")
+                        add_trace_event_filter(&flags, event_filters, TRACE_INPUT,
+                            TRACE_INPUT_FILTER_TURBOLINK_CABLE);
+                    else if (filter == "timer.irqs")
+                        add_trace_event_filter(&flags, event_filters, TRACE_TIMER, TRACE_TIMER_FILTER_IRQS);
+                    else if (filter == "timer.registers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_TIMER, TRACE_TIMER_FILTER_REGISTERS);
+                    else if (filter == "cdrom.irqs")
+                        add_trace_event_filter(&flags, event_filters, TRACE_CDROM, TRACE_CDROM_FILTER_IRQS);
+                    else if (filter == "cdrom.control")
+                        add_trace_event_filter(&flags, event_filters, TRACE_CDROM, TRACE_CDROM_FILTER_CONTROL);
+                    else if (filter == "cdrom.audio")
+                        add_trace_event_filter(&flags, event_filters, TRACE_CDROM, TRACE_CDROM_FILTER_AUDIO);
+                    else if (filter == "psg.global_lfo")
+                        add_trace_event_filter(&flags, event_filters, TRACE_PSG, TRACE_PSG_FILTER_GLOBAL);
+                    else if (filter == "psg.frequency")
+                        add_trace_event_filter(&flags, event_filters, TRACE_PSG, TRACE_PSG_FILTER_FREQUENCY);
+                    else if (filter == "psg.channel")
+                        add_trace_event_filter(&flags, event_filters, TRACE_PSG, TRACE_PSG_FILTER_CHANNEL);
+                    else if (filter == "psg.wave_dda")
+                        add_trace_event_filter(&flags, event_filters, TRACE_PSG, TRACE_PSG_FILTER_WAVE);
+                    else if (filter == "psg.noise")
+                        add_trace_event_filter(&flags, event_filters, TRACE_PSG, TRACE_PSG_FILTER_NOISE);
+                    else if (filter == "adpcm.registers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_ADPCM, TRACE_ADPCM_FILTER_REGISTERS);
+                    else if (filter == "adpcm.dma")
+                        add_trace_event_filter(&flags, event_filters, TRACE_ADPCM, TRACE_ADPCM_FILTER_DMA);
+                    else if (filter == "adpcm.playback")
+                        add_trace_event_filter(&flags, event_filters, TRACE_ADPCM, TRACE_ADPCM_FILTER_PLAYBACK);
+                    else if (filter == "adpcm.transfers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_ADPCM, TRACE_ADPCM_FILTER_TRANSFERS);
+                    else if (filter == "adpcm.irqs")
+                        add_trace_event_filter(&flags, event_filters, TRACE_ADPCM, TRACE_ADPCM_FILTER_IRQS);
+                    else if (filter == "scsi.commands")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_COMMANDS);
+                    else if (filter == "scsi.phases")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_PHASES);
+                    else if (filter == "scsi.responses")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_RESPONSES);
+                    else if (filter == "scsi.response_bytes")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_RESPONSE_BYTES);
+                    else if (filter == "scsi.transfers")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_TRANSFERS);
+                    else if (filter == "scsi.problems")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SCSI, TRACE_SCSI_FILTER_PROBLEMS);
+                    else if (filter == "system.mpr")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SYSTEM, TRACE_SYSTEM_FILTER_MPR);
+                    else if (filter == "system.mapper")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SYSTEM, TRACE_SYSTEM_FILTER_MAPPER);
+                    else if (filter == "system.interrupts")
+                        add_trace_event_filter(&flags, event_filters, TRACE_SYSTEM, TRACE_SYSTEM_FILTER_INTERRUPTS);
+                    else return {{"error", "Unknown trace filter: " + filter}};
+                }
+
+                if (flags == 0)
+                    return {{"error", "At least one trace filter is required"}};
+            }
         }
-        return m_debugAdapter.SetTraceLog(enabled, flags);
+        std::string output = arguments.value("output", "");
+        std::string memory_size = arguments.value("memory_size", "");
+        std::string disk_size = arguments.value("disk_size", "");
+        std::string output_path = arguments.value("output_path", "");
+        return m_debugAdapter.SetTraceLog(enabled, flags, output, memory_size,
+                                          disk_size, output_path, event_filters);
     }
     else
     {
@@ -3314,4 +3503,3 @@ void McpServer::HandleResourcesRead(const json& request)
 
     SendResponse(response);
 }
-

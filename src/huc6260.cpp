@@ -20,12 +20,14 @@
 #include <assert.h>
 #include <stdlib.h>
 #include "huc6260.h"
+#include "random.h"
 #include "trace_logger.h"
 
-HuC6260::HuC6260(HuC6202* huc6202, HuC6280* huc6280)
+HuC6260::HuC6260(HuC6202* huc6202, HuC6280* huc6280, Random* random)
 {
     m_huc6280 = huc6280;
     m_huc6202 = huc6202;
+    m_random = random;
     InitPointer(m_trace_logger);
     m_pixel_format = GG_PIXEL_RGBA8888;
     m_state.CR = &m_control_register;
@@ -65,6 +67,36 @@ void HuC6260::Init(GG_Pixel_Format pixel_format)
 void HuC6260::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
+}
+
+void HuC6260::LogVceEvent(u8 event)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_VCE;
+    e.vce.event = event;
+
+    switch (event)
+    {
+        case TRACE_VCE_CONTROL_WRITE:
+            e.vce.value = m_control_register;
+            break;
+        case TRACE_VCE_COLOR_WRITE:
+            e.vce.reg = m_color_table_address;
+            e.vce.value = m_color_table[m_color_table_address];
+            break;
+        case TRACE_VCE_VSYNC_START:
+        case TRACE_VCE_VSYNC_END:
+            e.vce.value = (u16)m_vpos;
+            break;
+        default:
+            break;
+    }
+
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+#endif
 }
 
 void HuC6260::InitPalettes()
@@ -135,10 +167,10 @@ void HuC6260::Reset()
     {
         if (m_reset_value < 0)
         {
-            bool random = (rand() & 0x1);
+            bool random = (m_random->Next8Bit() & 0x1);
             u16 and_value = random ? 0x1D0 : 0x1F1;
             u16 or_value = random ? 0x1C0 : 0x1FC;
-            m_color_table[i] = (((rand() & and_value) ) | or_value);
+            m_color_table[i] = ((m_random->Next16Bit() & and_value) | or_value);
             m_color_table[i] = MIN(m_color_table[i] + ((i & 0xFF) >> 2), 0x1FF);
         }
         else
@@ -222,16 +254,7 @@ void HuC6260::WriteRegister(u16 address, u8 value)
                     break;
             }
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            if (m_trace_logger->IsEnabled(TRACE_VCE))
-            {
-                GG_Trace_Entry e = {};
-                e.type = TRACE_VCE;
-                e.vce.event = TRACE_VCE_CONTROL_WRITE;
-                e.vce.value = m_control_register;
-                m_trace_logger->TraceLog(e);
-            }
-#endif
+            TraceVceEvent(TRACE_VCE_CONTROL_WRITE);
             break;
         }
         case 2:
@@ -254,17 +277,7 @@ void HuC6260::WriteRegister(u16 address, u8 value)
                 false);
             m_color_table[m_color_table_address] = (m_color_table[m_color_table_address] & 0x00FF) | ((value & 0x01) << 8);
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-            if (m_trace_logger->IsEnabled(TRACE_VCE))
-            {
-                GG_Trace_Entry e = {};
-                e.type = TRACE_VCE;
-                e.vce.event = TRACE_VCE_COLOR_WRITE;
-                e.vce.reg = (u8)(m_color_table_address & 0xFF);
-                e.vce.value = m_color_table[m_color_table_address];
-                m_trace_logger->TraceLog(e);
-            }
-#endif
+            TraceVceEvent(TRACE_VCE_COLOR_WRITE);
             m_color_table_address = (m_color_table_address + 1) & 0x01FF;
             break;
         default:

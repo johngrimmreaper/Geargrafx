@@ -72,6 +72,37 @@ void CdRom::SetTraceLogger(TraceLogger* trace_logger)
     m_trace_logger = trace_logger;
 }
 
+void CdRom::LogCdRomEvent(u8 event, u8 value)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    GG_Trace_Entry e = {};
+    e.type = TRACE_CDROM;
+    e.cdrom.event = event;
+
+    switch (event)
+    {
+        case TRACE_CDROM_IRQ_SET:
+        case TRACE_CDROM_IRQ_CLEAR:
+        case TRACE_CDROM_IRQ_ENABLE:
+        case TRACE_CDROM_RESET:
+            e.cdrom.irq_type = value;
+            e.cdrom.active = m_active_irqs;
+            e.cdrom.enabled = m_enabled_irqs;
+            break;
+        case TRACE_CDROM_FADER:
+            e.cdrom.irq_type = value;
+            break;
+        default:
+            break;
+    }
+
+    m_trace_logger->TraceLog(e);
+#else
+    UNUSED(event);
+    UNUSED(value);
+#endif
+}
+
 void CdRom::Reset()
 {
     m_reset = 0;
@@ -196,6 +227,9 @@ void CdRom::WriteRegister(u16 address, u8 value)
                 m_scsi_controller->ClearSignal(ScsiController::SCSI_SIGNAL_ACK);
 
             m_enabled_irqs = value & 0x7F;
+
+            TraceCdRomEvent(TRACE_CDROM_IRQ_ENABLE, value);
+
             AssertIRQ2();
             break;
         }
@@ -211,6 +245,9 @@ void CdRom::WriteRegister(u16 address, u8 value)
             }
             else
                 m_scsi_controller->ClearSignal(ScsiController::SCSI_SIGNAL_RST);
+
+            TraceCdRomEvent(TRACE_CDROM_RESET, value);
+
             break;
         case 0x05:
             // Audio Sample

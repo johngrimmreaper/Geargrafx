@@ -25,6 +25,12 @@
 #include "huc6280.h"
 #include "trace_logger.h"
 
+INLINE void HuC6260::TraceVceEvent(u8 event)
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_VCE, event))
+        LogVceEvent(event);
+}
+
 template <bool is_sgx>
 INLINE bool HuC6260::Clock(u32 cycles)
 {
@@ -32,9 +38,17 @@ INLINE bool HuC6260::Clock(u32 cycles)
 
     while (cycles > 0)
     {
-        u32 cycles_to_next_pixel = m_clock_divider - (m_hpos % m_clock_divider);
-        if (cycles_to_next_pixel > cycles)
-            cycles_to_next_pixel = cycles;
+        u32 cycles_to_next_pixel;
+        if (m_clock_divider == 2)
+            cycles_to_next_pixel = 2 - (m_hpos & 1);
+        else if (m_clock_divider == 4)
+            cycles_to_next_pixel = 4 - (m_hpos & 3);
+        else
+            cycles_to_next_pixel = 3 - (m_hpos % 3);
+
+        u32 step = cycles_to_next_pixel;
+        if (step > cycles)
+            step = cycles;
 
         u32 cycles_to_line_end = HUC6260_LINE_LENGTH - m_hpos;
         if (cycles_to_line_end > cycles)
@@ -46,16 +60,16 @@ INLINE bool HuC6260::Clock(u32 cycles)
         if (cycles_to_hsync > cycles)
             cycles_to_hsync = cycles;
 
-        u32 step = cycles_to_next_pixel;
         if (cycles_to_line_end < step)
             step = cycles_to_line_end;
         if (cycles_to_hsync < step)
             step = cycles_to_hsync;
 
+        bool pixel_clock = (step == cycles_to_next_pixel);
         m_hpos += step;
         cycles -= step;
 
-        if ((m_hpos % m_clock_divider) == 0)
+        if (pixel_clock)
         {
             m_pixel_x++;
             if (m_pixel_x == k_huc6260_full_line_width[m_speed])
@@ -117,16 +131,7 @@ INLINE bool HuC6260::Clock(u32 cycles)
                 m_vsync = false;
                 m_huc6202->SetVSyncLow();
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-                if (m_trace_logger->IsEnabled(TRACE_VCE))
-                {
-                    GG_Trace_Entry e = {};
-                    e.type = TRACE_VCE;
-                    e.vce.event = TRACE_VCE_VSYNC_START;
-                    e.vce.value = (u16)m_vpos;
-                    m_trace_logger->TraceLog(e);
-                }
-#endif
+                TraceVceEvent(TRACE_VCE_VSYNC_START);
             }
             // End of vertical sync
             else if (m_vpos == (k_huc6260_total_lines[m_blur] - 1))
@@ -136,16 +141,7 @@ INLINE bool HuC6260::Clock(u32 cycles)
                 m_pixel_index = 0;
                 frame_ready = true;
 
-#if !defined(GG_DISABLE_DISASSEMBLER)
-                if (m_trace_logger->IsEnabled(TRACE_VCE))
-                {
-                    GG_Trace_Entry e = {};
-                    e.type = TRACE_VCE;
-                    e.vce.event = TRACE_VCE_VSYNC_END;
-                    e.vce.value = (u16)m_vpos;
-                    m_trace_logger->TraceLog(e);
-                }
-#endif
+                TraceVceEvent(TRACE_VCE_VSYNC_END);
             }
 
             if(m_vpos >= 14 && m_vpos < 256)
@@ -168,38 +164,39 @@ INLINE bool HuC6260::Clock(u32 cycles)
 template <bool is_sgx>
 INLINE void HuC6260::RenderFrame()
 {
-    if (!IsValidPointer(m_frame_buffer))
-        return;
+    bool multiple_speeds = m_multiple_speeds;
 
-    if (is_sgx)
+    if (IsValidPointer(m_frame_buffer))
     {
-        if (m_pixel_format == GG_PIXEL_RGB565)
-            RenderFrameTemplate<true, 2>();
+        if (is_sgx)
+        {
+            if (m_pixel_format == GG_PIXEL_RGB565)
+                RenderFrameTemplate<true, 2>();
+            else
+                RenderFrameTemplate<true, 4>();
+        }
         else
-            RenderFrameTemplate<true, 4>();
-    }
-    else
-    {
-        if (m_pixel_format == GG_PIXEL_RGB565)
-            RenderFrameTemplate<false, 2>();
-        else
-            RenderFrameTemplate<false, 4>();
+        {
+            if (m_pixel_format == GG_PIXEL_RGB565)
+                RenderFrameTemplate<false, 2>();
+            else
+                RenderFrameTemplate<false, 4>();
+        }
+
+        if (multiple_speeds)
+            AdjustForMultipleDividers();
+
+        if (m_lowpass_enabled)
+        {
+            if (m_pixel_format == GG_PIXEL_RGB565)
+                ApplyLowPassFilter<2>();
+            else
+                ApplyLowPassFilter<4>();
+        }
     }
 
-    m_scaled_width = m_multiple_speeds;
-    if (m_multiple_speeds)
-    {
-        m_multiple_speeds = false;
-        AdjustForMultipleDividers();
-    }
-
-    if (m_lowpass_enabled)
-    {
-        if (m_pixel_format == GG_PIXEL_RGB565)
-            ApplyLowPassFilter<2>();
-        else
-            ApplyLowPassFilter<4>();
-    }
+    m_scaled_width = multiple_speeds;
+    m_multiple_speeds = false;
 }
 
 template <bool is_sgx, int bytes_per_pixel>
@@ -211,55 +208,21 @@ void HuC6260::RenderFrameTemplate()
 
     if (is_sgx)
     {
-        HuC6202::HuC6202_Window_Priority* priorities = m_huc6202->GetWindowPriorities();
+        const u8* source_selection = m_huc6202->GetSourceSelection();
 
         for (int i = 0; i < m_pixel_index; i++)
         {
             u16 pixel_1 = m_vce_buffer_1[i];
             u16 pixel_2 = m_vce_buffer_2[i];
             int win_mode = (pixel_1 >> 14) & 0x0003;
+            int classification = ((pixel_1 >> 12) & 0x03) | ((pixel_2 >> 10) & 0x0C);
+            u8 source = source_selection[(win_mode * 16) | classification];
+            u16 final_pixel = 0x100;
 
-            HuC6202::HuC6202_Window_Priority* priority = &priorities[win_mode];
-            int vdc_1_enabled = priority->vdc_1_enabled;
-            int vdc_2_enabled = priority->vdc_2_enabled << 1;
-            int vdcs_enabled = vdc_1_enabled | vdc_2_enabled;
-
-            u16 final_pixel = 0;
-
-            if (vdcs_enabled == 0)
-                final_pixel = 0x100;
-            else if (vdcs_enabled == 1)
+            if (source == HuC6202::HuC6202_SOURCE_VDC_1)
                 final_pixel = pixel_1;
-            else if (vdcs_enabled == 2)
+            else if (source == HuC6202::HuC6202_SOURCE_VDC_2)
                 final_pixel = pixel_2;
-            else
-            {
-                bool is_pixel_1_transparent = (pixel_1 & 0x2000);
-                bool is_pixel_2_transparent = (pixel_2 & 0x2000);
-                bool is_vdc_1_sprite = (pixel_1 & 0x1000);
-                bool is_vdc_2_sprite = (pixel_2 & 0x1000);
-
-                switch (priority->priority_mode)
-                {
-                    case HuC6202::HuC6270_PRIORITY_DEFAULT:
-                        final_pixel = is_pixel_1_transparent ? pixel_2 : pixel_1;
-                        break;
-                    case HuC6202::HuC6270_PRIORITY_SPRITES_2_ABOVE_BG_1:
-                        if (is_pixel_1_transparent || (is_vdc_2_sprite && !is_vdc_1_sprite && !is_pixel_2_transparent))
-                            final_pixel = pixel_2;
-                        else
-                            final_pixel = pixel_1;
-                        break;
-                    case HuC6202::HuC6270_PRIORITY_SPRITES_1_BELOW_BG_2:
-                    {
-                        if (is_pixel_1_transparent || (is_vdc_1_sprite && !is_vdc_2_sprite && !is_pixel_2_transparent))
-                            final_pixel = pixel_2;
-                        else
-                            final_pixel = pixel_1;
-                        break;
-                    }
-                }
-            }
 
             if (final_pixel & HUC6270_PIXEL_BLACK)
             {

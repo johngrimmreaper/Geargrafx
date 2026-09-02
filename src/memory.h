@@ -31,9 +31,11 @@ class HuC6280;
 class Input;
 class Audio;
 class CdRom;
+class Random;
 class Mapper;
 class SF2Mapper;
 class ArcadeCardMapper;
+class TraceLogger;
 
 class Memory
 {
@@ -51,18 +53,23 @@ public:
     };
 
 public:
-    Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom);
+    Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom, Random* random);
     ~Memory();
     void Init();
     void Reset();
     u8 Read(u16 address, bool block_transfer = false);
     bool TryPeek(u16 address, u8* value);
     bool TryPeek(u16 address, u8 bank, u8* value);
+    bool CanPoke(u16 address);
+    bool CanPoke(u16 address, u8 bank);
+    bool TryPoke(u16 address, u8 value);
+    bool TryPoke(u16 address, u8 bank, u8 value);
     void Write(u16 address, u8 value, bool block_transfer = false);
     void SetMpr(u8 index, u8 value);
     u8 GetMpr(u8 index);
     void SetMprTAM(u8 bits, u8 value);
     u8 GetMprTMA(u8 bits);
+    void SetTraceLogger(TraceLogger* trace_logger);
     u32 GetPhysicalAddress(u16 address);
     bool GetROMPhysicalAddress(u16 cpu_address, u32& address);
     bool GetROMPhysicalAddress(u8 bank, u16 offset, u32& address);
@@ -101,6 +108,8 @@ public:
 
 private:
     void ReloadMemoryMap();
+    void TraceMprEvent(u8 bits, u8 index, u8 new_value);
+    void LogMprEvent(u8 bits, u8 index, u8 new_value);
 #if !defined(GG_DISABLE_DISASSEMBLER)
     void CheckPhysicalMemoryBreakpoints(u8 bank, u32 offset, bool read);
 #endif
@@ -115,6 +124,8 @@ private:
     Input* m_input;
     Audio* m_audio;
     CdRom* m_cdrom;
+    Random* m_random;
+    TraceLogger* m_trace_logger;
     u8 m_mpr[8];
     u8* m_memory_map[0x100] = {};
     bool m_memory_map_write[0x100] = {};

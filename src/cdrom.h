@@ -71,6 +71,8 @@ public:
     void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
+    void TraceCdRomEvent(u8 event, u8 value = 0);
+    void LogCdRomEvent(u8 event, u8 value);
     void AssertIRQ2();
     void LatchCdAudioSample();
     void WriteFader(u8 value);

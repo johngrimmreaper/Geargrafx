@@ -21,6 +21,7 @@
 #define EMU_H
 
 #include "geargrafx.h"
+#include "turbolink/turbolink_manager.h"
 
 #ifdef EMU_IMPORT
     #define EXTERN
@@ -97,6 +98,7 @@ EXTERN void emu_save_state_file(const char* file_path);
 EXTERN void emu_load_state_file(const char* file_path);
 EXTERN void update_savestates_data(void);
 EXTERN void emu_get_runtime(GG_Runtime_Info& runtime);
+EXTERN double emu_get_frame_rate(void);
 EXTERN void emu_get_info(char* info, int buffer_size);
 EXTERN GeargrafxCore* emu_get_core(void);
 EXTERN void emu_debug_step_over(void);
@@ -143,7 +145,20 @@ EXTERN void emu_mcp_start(void);
 EXTERN void emu_mcp_stop(void);
 EXTERN bool emu_mcp_is_running(void);
 EXTERN int emu_mcp_get_transport_mode(void);
+EXTERN const char* emu_mcp_get_http_address(void);
+EXTERN int emu_mcp_get_http_port(void);
 EXTERN void emu_mcp_pump_commands(void);
+EXTERN bool emu_turbolink_connect(int session);
+EXTERN void emu_turbolink_stop(void);
+EXTERN void emu_turbolink_pump(void);
+EXTERN bool emu_turbolink_is_active(void);
+EXTERN bool emu_turbolink_is_core_suspended(void);
+EXTERN bool emu_turbolink_is_cable_connected(void);
+EXTERN bool emu_turbolink_has_remote_peer(void);
+EXTERN bool emu_turbolink_is_pacing_peer(void);
+EXTERN TurboLinkStatus emu_turbolink_get_status(void);
+EXTERN void emu_turbolink_reset_metrics(void);
+EXTERN void emu_turbolink_set_normal_barrier_stall_us(u32 stall_us);
 EXTERN void emu_reset_rewind_timing(void);
 
 #undef EMU_IMPORT

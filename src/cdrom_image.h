@@ -71,6 +71,8 @@ public:
     u32 GetCRC();
     u32 GetCurrentSector();
     void SetCurrentSector(u32 sector);
+    bool IsAudioSector(u32 lba, bool include_lead_in = false);
+    s32 FindTrackFromLBA(u32 lba, bool include_lead_in = false);
 
 protected:
     void GatherPaths(const char* path);
