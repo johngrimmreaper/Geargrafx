@@ -30,6 +30,13 @@ CdRomImage::~CdRomImage()
 {
 }
 
+bool CdRomImage::ReadSubchannelQ(s32 lba, u8* buffer)
+{
+    UNUSED(lba);
+    UNUSED(buffer);
+    return false;
+}
+
 void CdRomImage::Init()
 {
 }
@@ -68,17 +75,6 @@ u32 CdRomImage::GetFirstSectorOfTrack(u8 track)
     return 0;
 }
 
-u32 CdRomImage::GetLastSectorOfTrack(u8 track)
-{
-    if (track < m_toc.tracks.size())
-    {
-        return m_toc.tracks[track].end_lba;
-    }
-
-    Error("GetLastSectorOfTrack failed - Track number %d out of bounds (max: %d)", track, m_toc.tracks.size());
-    return 0;
-}
-
 s32 CdRomImage::GetTrackFromLBA(u32 lba)
 {
     if (lba >= m_toc.sector_count)
@@ -105,14 +101,21 @@ bool CdRomImage::IsAudioSector(u32 lba, bool include_lead_in)
     return (track >= 0) && (m_toc.tracks[(size_t)track].type == GG_CDROM_AUDIO_TRACK);
 }
 
-const char* CdRomImage::GetFilePath()
+bool CdRomImage::IsPlayableAudioSector(u32 lba)
 {
-    return m_file_path;
-}
+    if (lba >= m_toc.sector_count)
+        return false;
 
-const char* CdRomImage::GetFileDirectory()
-{
-    return m_file_directory;
+    s32 track = FindTrackFromLBA(lba, true);
+
+    if ((track < 0) || (m_toc.tracks[(size_t)track].type != GG_CDROM_AUDIO_TRACK))
+        return false;
+
+    if (lba >= m_toc.tracks[(size_t)track].start_lba)
+        return true;
+
+    return m_toc.tracks[(size_t)track].lead_in_stored && (track > 0) &&
+        (m_toc.tracks[(size_t)track - 1].type == GG_CDROM_AUDIO_TRACK);
 }
 
 const char* CdRomImage::GetFileName()
@@ -189,6 +192,7 @@ void CdRomImage::InitTrack(Track& track)
     track.end_msf = {0, 0, 0};
     track.has_lead_in = false;
     track.lead_in_lba = 0;
+    track.lead_in_stored = false;
     track.file_offset = 0;
 }
 

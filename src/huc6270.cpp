@@ -99,6 +99,77 @@ void HuC6270::LogVdcEvent(u8 event, u8 raw, bool msb)
 #endif
 }
 
+void HuC6270::LogSpriteBudget()
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    bool trace_budget = m_trace_logger->IsEventEnabled(TRACE_VDC, TRACE_VDC_SPRITE_BUDGET);
+    bool trace_limit = m_trace_logger->IsEventEnabled(TRACE_VDC, TRACE_VDC_SPRITE_LIMIT);
+
+    if (!trace_budget && !trace_limit)
+        return;
+
+    int requested = 0;
+
+    for (int i = 0; i < HUC6270_SPRITES; i++)
+    {
+        int sprite_offset = i << 2;
+        int sprite_y = (m_sat[sprite_offset + 0] & 0x3FF) - 64;
+        u16 flags = m_sat[sprite_offset + 3];
+        int height = k_huc6270_sprite_height[(flags >> 12) & 0x03];
+
+        if ((sprite_y <= m_raster_line) && ((sprite_y + height) > m_raster_line))
+            requested += ((flags >> 8) & 0x01) + 1;
+    }
+
+    bool limit = requested > 16;
+
+    if (!trace_budget && !limit)
+        return;
+
+    GG_Trace_Entry e = {};
+    e.type = TRACE_VDC;
+    e.vdc.chip = m_chip_id;
+    e.vdc.value = (u16)m_raster_line;
+    e.vdc.value2 = (u16)m_sprite_count;
+    e.vdc.value3 = (u16)requested;
+
+    if (trace_budget)
+    {
+        e.vdc.event = TRACE_VDC_SPRITE_BUDGET;
+        m_trace_logger->TraceLog(e);
+    }
+
+    if (trace_limit && limit)
+    {
+        e.vdc.event = TRACE_VDC_SPRITE_LIMIT;
+        m_trace_logger->TraceLog(e);
+    }
+#endif
+}
+
+void HuC6270::LogMissedVBlank()
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    if (m_chip_id != 0)
+        return;
+
+    u32 misses = m_huc6280->UpdateVBlankWatch();
+
+    if (misses == 0)
+        return;
+
+    GG_Trace_Entry e = {};
+    e.type = TRACE_VDC;
+    e.vdc.event = TRACE_VDC_MISSED_VBLANK;
+    e.vdc.chip = m_chip_id;
+    e.vdc.value = m_huc6280->GetVBlankWatchAddress();
+    e.vdc.raw = (m_huc6280->GetVBlankWatchAccess(true) ? 0x01 : 0x00) |
+        (m_huc6280->GetVBlankWatchAccess(false) ? 0x02 : 0x00);
+    e.vdc.param = misses;
+    m_trace_logger->TraceLog(e);
+#endif
+}
+
 void HuC6270::Reset()
 {
     memset(m_register, 0, sizeof(m_register));
@@ -123,6 +194,7 @@ void HuC6270::Reset()
     m_pending_memory_read = false;
     m_pending_memory_write = false;
     m_transfer_delay = 0;
+    m_cpu_vram_cycles = 0;
     m_load_bg_start_clock = HUC6260_LINE_LENGTH;
     m_load_bg_end_clock = 0;
     m_hsync_start_clock = 0;
@@ -167,11 +239,13 @@ void HuC6270::Reset()
     m_line_buffer_index = 0;
     m_sprite_count = 0;
     m_sprite_overflow = false;
+    m_line_scroll_frame = 0;
 
     memset(m_vram, 0, sizeof(m_vram));
     memset(m_sat, 0, sizeof(m_sat));
     memset(m_line_buffer, 0, sizeof(m_line_buffer));
     memset(m_line_buffer_sprites, 0, sizeof(m_line_buffer_sprites));
+    memset(m_line_scroll, 0, sizeof(m_line_scroll));
     memset(m_sprites, 0, sizeof(m_sprites));
 }
 
@@ -384,6 +458,7 @@ void HuC6270::EndOfLine()
     if (m_vpos == m_huc6260->GetTotalLines())
     {
         m_vpos = 0;
+        m_line_scroll_frame++;
         m_latched_cr = (m_latched_cr & ~0x00C0) | (HUC6270_VAR_CR & 0x00C0);
         m_burst_mode = ((HUC6270_VAR_CR & 0x00C0) == 0);
     }
@@ -427,6 +502,7 @@ void HuC6270::LineEvents()
                 if ((m_v_state != HuC6270_VERTICAL_STATE_VDW) && !m_vblank_triggered)
                 {
                     m_vblank_triggered = true;
+                    TraceMissedVBlank();
                     VBlankIRQ();
                 }
 
@@ -446,7 +522,10 @@ void HuC6270::LineEvents()
                 IncrementRasterLine();
 
                 if ((m_v_state == HuC6270_VERTICAL_STATE_VDW) && !m_burst_mode)
+                {
                     FetchSprites();
+                    TraceSpriteBudget();
+                }
 
                 break;
             default:
@@ -707,6 +786,13 @@ void HuC6270::RenderBackground(int width)
     int bg_x = m_latched_bxr & screen_size_x_mask;
     int i = 0;
 
+    HuC6270_Line_Scroll* line_scroll = &m_line_scroll[m_vpos - HUC6270_ACTIVE_DISPLAY_START];
+    line_scroll->frame = m_line_scroll_frame;
+    line_scroll->x = (u16)bg_x;
+    line_scroll->y = (u16)bg_y;
+    line_scroll->start = (u16)m_hpos;
+    line_scroll->width = (u16)width;
+
     while (i < width)
     {
         int tile_col = bg_x >> 3;
@@ -728,19 +814,24 @@ void HuC6270::RenderBackground(int width)
         u8 byte4 = word_b >> 8;
 
         u16 color_table = (bat_entry >> 12) << 4;
-        int count = MIN(8 - (bg_x & 7), width - i);
-        int tile_x = 7 - (bg_x & 7);
-        int end = i + count;
+        u16 pixels[8];
 
-        for (; i < end; i++)
+        for (int x = 0; x < 8; x++)
         {
-            u16 color = ((byte1 >> tile_x) & 0x01) |
-                    (((byte2 >> tile_x) & 0x01) << 1) |
-                    (((byte3 >> tile_x) & 0x01) << 2) |
-                    (((byte4 >> tile_x) & 0x01) << 3);
-            m_line_buffer[i] = color_table | color;
-            tile_x--;
+            u16 color = ((byte1 >> (7 - x)) & 0x01) |
+                    (((byte2 >> (7 - x)) & 0x01) << 1) |
+                    (((byte3 >> (7 - x)) & 0x01) << 2) |
+                    (((byte4 >> (7 - x)) & 0x01) << 3);
+            pixels[x] = color_table | color;
         }
+
+        int offset = bg_x & 7;
+        int count = MIN(8 - offset, width - i);
+        if (count == 8)
+            memcpy(m_line_buffer + i, pixels, sizeof(pixels));
+        else
+            memcpy(m_line_buffer + i, pixels + offset, count * sizeof(u16));
+        i += count;
 
         bg_x = (bg_x + count) & screen_size_x_mask;
     }
@@ -790,7 +881,10 @@ void HuC6270::RenderSprites(int width)
         u16 plane2 = m_sprites[i].data[1];
         u16 plane3 = m_sprites[i].data[2];
         u16 plane4 = m_sprites[i].data[3];
+        u16 opaque = plane1 | plane2 | plane3 | plane4;
 
+        if (opaque == 0)
+            continue;
 
         int start_x = (pos < 0) ? -pos : 0;
         int end_x = (pos + 15 >= width) ? (width - pos - 1) : 15;
@@ -803,10 +897,10 @@ void HuC6270::RenderSprites(int width)
             else
                 pixel_x = 15 - (x & 0xF);
 
-            u16 pixel = ((plane1 >> pixel_x) & 0x01) | (((plane2 >> pixel_x) & 0x01) << 1) | (((plane3 >> pixel_x) & 0x01) << 2) | (((plane4 >> pixel_x) & 0x01) << 3);
-
-            if(pixel & 0x0F)
+            if ((opaque >> pixel_x) & 0x01)
             {
+                u16 pixel = ((plane1 >> pixel_x) & 0x01) | (((plane2 >> pixel_x) & 0x01) << 1) |
+                    (((plane3 >> pixel_x) & 0x01) << 2) | (((plane4 >> pixel_x) & 0x01) << 3);
                 int x_in_screen = pos + x;
 
                 if ((m_sprites[i].index == 0) && (m_line_buffer_sprites[x_in_screen] & 0x0F) &&
@@ -1000,6 +1094,7 @@ void HuC6270::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_latch_clock_x), sizeof(m_latch_clock_x));
     stream.write(reinterpret_cast<const char*> (&m_bxr_written_before_latch), sizeof(m_bxr_written_before_latch));
     stream.write(reinterpret_cast<const char*> (&m_byr_lsb_write_clock), sizeof(m_byr_lsb_write_clock));
+    stream.write(reinterpret_cast<const char*> (&m_cpu_vram_cycles), sizeof(m_cpu_vram_cycles));
 }
 
 void HuC6270::LoadState(std::istream& stream, int version)
@@ -1111,4 +1206,9 @@ void HuC6270::LoadState(std::istream& stream, int version)
         m_bxr_written_before_latch = false;
         m_byr_lsb_write_clock = -1;
     }
+
+    if (version >= 44)
+        stream.read(reinterpret_cast<char*> (&m_cpu_vram_cycles), sizeof(m_cpu_vram_cycles));
+    else
+        m_cpu_vram_cycles = 0;
 }

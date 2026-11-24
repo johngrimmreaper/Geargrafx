@@ -30,17 +30,19 @@ public:
     virtual ~MediaFile();
 
     static MediaFile* OpenFile(const char* path);
-    static void SetVfsInterface(const retro_vfs_interface* iface);
-    static bool HasVfsInterface();
+    static void SetVfsInterface(const retro_vfs_interface* iface, unsigned version = 1);
 
     virtual bool Open(const char* path) = 0;
     virtual void Close() = 0;
     virtual bool IsOpen() const = 0;
     virtual bool IsValid() const = 0;
+    virtual bool CanSeek() const = 0;
     virtual s64 GetSize() = 0;
     virtual s64 Tell() = 0;
     virtual bool Seek(s64 offset) = 0;
     virtual s64 Read(void* buffer, u64 size) = 0;
+    bool ReadExact(void* buffer, u64 size);
+    bool ReadAt(u64 offset, void* buffer, u64 size);
 };
 
 #endif /* MEDIA_FILE_H */

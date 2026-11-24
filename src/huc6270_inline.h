@@ -32,6 +32,18 @@ INLINE void HuC6270::TraceVdcEvent(u8 event, u8 raw, bool msb)
         LogVdcEvent(event, raw, msb);
 }
 
+INLINE void HuC6270::TraceSpriteBudget()
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEnabled(TRACE_VDC))
+        LogSpriteBudget();
+}
+
+INLINE void HuC6270::TraceMissedVBlank()
+{
+    if (IsValidPointer(m_trace_logger) && m_trace_logger->IsEventEnabled(TRACE_VDC, TRACE_VDC_MISSED_VBLANK))
+        LogMissedVBlank();
+}
+
 INLINE u16 HuC6270::Clock()
 {
     if (m_sat_transfer_pending > 0)
@@ -45,7 +57,9 @@ INLINE u16 HuC6270::Clock()
     while (m_clocks_to_next_h_state == 0)
         NextHorizontalState();
 
-    if (m_clocks_to_next_event > 0)
+    if (m_clocks_to_next_event > 1)
+        m_clocks_to_next_event--;
+    else if (m_clocks_to_next_event == 1)
         LineEvents();
 
     u16 pixel = m_burst_mode ? HUC6270_PIXEL_BLACK : 0x100;
@@ -67,6 +81,16 @@ INLINE u16 HuC6270::Clock()
     return pixel;
 }
 
+INLINE bool HuC6270::GetDisplayRange(s32* start, s32* end)
+{
+    if (!m_active_line || m_burst_mode)
+        return false;
+
+    *start = (m_huc6260->GetClockDivider() == 3 ? 32 : 24) + ((m_latched_hds + 1) << 3);
+    *end = *start + ((m_latched_hdw + 1) << 3);
+    return true;
+}
+
 INLINE HuC6270::HuC6270_State* HuC6270::GetState()
 {
     return &m_state;
@@ -82,8 +106,16 @@ INLINE u16* HuC6270::GetSAT()
     return m_sat;
 }
 
+INLINE HuC6270::HuC6270_Line_Scroll* HuC6270::GetLineScroll(u32* frame)
+{
+    *frame = m_line_scroll_frame;
+    return m_line_scroll;
+}
+
 INLINE void HuC6270::ProcessCpuVramAccesses(u32 cycles)
 {
+    cycles += m_cpu_vram_cycles;
+
     while (HasPendingCpuVramAccess() && (cycles >= 3))
     {
         if (m_transfer_delay > 0)
@@ -111,6 +143,8 @@ INLINE void HuC6270::ProcessCpuVramAccesses(u32 cycles)
 
         cycles -= 3;
     }
+
+    m_cpu_vram_cycles = HasPendingCpuVramAccess() ? cycles : 0;
 }
 
 INLINE bool HuC6270::HasPendingCpuVramAccess()
@@ -130,9 +164,10 @@ INLINE void HuC6270::LatchScrollY()
         {
             m_bg_counter_y = m_register[HUC6270_REG_BYR];
             m_bg_scroll_y_update_pending = false;
+            m_bg_counter_y++;
         }
-
-        m_bg_counter_y++;
+        else if (m_increment_bg_counter_y)
+            m_bg_counter_y++;
     }
 
     m_bg_offset_y = m_bg_counter_y;

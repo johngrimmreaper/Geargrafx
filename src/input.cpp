@@ -41,6 +41,7 @@ Input::Input(Media* media, GeargrafxCore* core)
     m_mouse_shifter = 0;
     m_mouse_latched = false;
     m_mouse_last_latch_cycles = 0;
+    m_activity_count = 0;
 
     for (int i = 0; i < GG_MAX_GAMEPADS; i++)
     {
@@ -203,9 +204,28 @@ void Input::SaveState(std::ostream& stream)
         m_mb128.SaveState(stream);
 
     m_turbolink.SaveState(stream);
+
+    for (int i = 0; i < GG_MAX_GAMEPADS; i++)
+    {
+        u8 controller_type = (u8)m_controller_type[i];
+        u16 avenue_button = (u16)GetAvenuePad3Button((GG_Controllers)i);
+        stream.write(reinterpret_cast<const char*>(&controller_type), sizeof(controller_type));
+        stream.write(reinterpret_cast<const char*>(&avenue_button), sizeof(avenue_button));
+        stream.write(reinterpret_cast<const char*>(&m_avenue_pad_3_state[i]), sizeof(m_avenue_pad_3_state[i]));
+
+        for (int j = 0; j < 2; j++)
+        {
+            u8 enabled = m_turbo_enabled[i][j] ? 1 : 0;
+            u8 state = m_turbo_state[i][j] ? 1 : 0;
+            stream.write(reinterpret_cast<const char*>(&enabled), sizeof(enabled));
+            stream.write(reinterpret_cast<const char*>(&m_turbo_speed[i][j]), sizeof(m_turbo_speed[i][j]));
+            stream.write(reinterpret_cast<const char*>(&state), sizeof(state));
+            stream.write(reinterpret_cast<const char*>(&m_turbo_counter[i][j]), sizeof(m_turbo_counter[i][j]));
+        }
+    }
 }
 
-void Input::LoadState(std::istream& stream, int version)
+void Input::LoadState(std::istream& stream, int version, bool has_mb128_flag)
 {
     using namespace std;
     stream.read(reinterpret_cast<char*> (&m_clr), sizeof(m_clr));
@@ -246,7 +266,8 @@ void Input::LoadState(std::istream& stream, int version)
     }
 
     bool mb128_included = false;
-    stream.read(reinterpret_cast<char*> (&mb128_included), sizeof(mb128_included));
+    if (has_mb128_flag)
+        stream.read(reinterpret_cast<char*> (&mb128_included), sizeof(mb128_included));
 
     if (mb128_included)
         m_mb128.LoadState(stream);
@@ -255,6 +276,62 @@ void Input::LoadState(std::istream& stream, int version)
         m_turbolink.LoadState(stream);
     else
         m_turbolink.RestoreControl(m_sel, m_clr);
+
+    for (int i = 0; i < GG_MAX_GAMEPADS; i++)
+    {
+        GG_Keys avenue_button = GetAvenuePad3Button((GG_Controllers)i);
+        m_avenue_pad_3_state[i] = 0xFFFF;
+
+        if (m_controller_type[i] == GG_CONTROLLER_AVENUE_PAD_3)
+        {
+            if (!(m_gamepads[i] & GG_KEY_III))
+                m_avenue_pad_3_state[i] &= ~GG_KEY_III;
+            else if (!(m_gamepads[i] & avenue_button))
+                m_avenue_pad_3_state[i] &= ~avenue_button;
+        }
+
+        u8 controller_type = 0;
+        u16 saved_avenue_button = 0;
+        u16 avenue_state = 0xFFFF;
+        if (version >= 41)
+        {
+            stream.read(reinterpret_cast<char*>(&controller_type), sizeof(controller_type));
+            stream.read(reinterpret_cast<char*>(&saved_avenue_button), sizeof(saved_avenue_button));
+            stream.read(reinterpret_cast<char*>(&avenue_state), sizeof(avenue_state));
+            if (stream.fail())
+                return;
+
+            if ((controller_type == m_controller_type[i]) && (saved_avenue_button == avenue_button))
+                m_avenue_pad_3_state[i] = avenue_state;
+        }
+
+        for (int j = 0; j < 2; j++)
+        {
+            m_turbo_state[i][j] = false;
+            m_turbo_counter[i][j] = 0;
+
+            if (version >= 41)
+            {
+                u8 enabled = 0;
+                u8 speed = 0;
+                u8 state = 0;
+                u8 counter = 0;
+                stream.read(reinterpret_cast<char*>(&enabled), sizeof(enabled));
+                stream.read(reinterpret_cast<char*>(&speed), sizeof(speed));
+                stream.read(reinterpret_cast<char*>(&state), sizeof(state));
+                stream.read(reinterpret_cast<char*>(&counter), sizeof(counter));
+                if (stream.fail())
+                    return;
+
+                if ((controller_type == m_controller_type[i]) && (enabled == (u8)m_turbo_enabled[i][j]) &&
+                    (speed == m_turbo_speed[i][j]))
+                {
+                    m_turbo_state[i][j] = state != 0;
+                    m_turbo_counter[i][j] = counter;
+                }
+            }
+        }
+    }
 }
 
 u64 Input::GetMasterClockCycles()

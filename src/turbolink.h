@@ -23,7 +23,7 @@
 #include <iosfwd>
 #include "types.h"
 
-#define TURBOLINK_MAX_SYNC_CYCLES 64
+#define TURBOLINK_MAX_SYNC_CYCLES 60
 #define TURBOLINK_MAX_LEAD_CYCLES 256
 
 #define GG_TURBOLINK_LINE_1 0x01
@@ -92,8 +92,6 @@ public:
     u64 GetLastSampleTick() const;
     u64 GetLastControlTick() const;
     u64 GetLastDriveTick() const;
-    bool GetSel() const;
-    bool GetClr() const;
     void SaveState(std::ostream& stream) const;
     void LoadState(std::istream& stream);
     void RestoreControl(bool sel, bool clr);

@@ -58,7 +58,7 @@ public:
     virtual bool ReadSector(u32 lba, u8* buffer) override;
     virtual bool ReadSamples(u32 lba, u32 offset, s16* buffer, u32 count) override;
     virtual bool PreloadDisc() override;
-    virtual bool PreloadTrack(u32 track_number) override;
+    virtual bool PreloadTrack(u32 track_number, u32 lba) override;
     bool HasDiscError() const;
 
 private:
@@ -97,7 +97,6 @@ private:
     void ResetQueue();
     bool ShouldLogReadDiagnostic();
     u32 CacheIndex(u32 block_lba) const;
-    u32 BlockStartLBA(u32 lba) const;
     u32 BlockStartLBAForTrack(u32 lba, const Track& track) const;
     u32 ReadAheadBlocksForTrack(const Track& track) const;
     bool IsBlockWithinTrack(u32 block_lba, const Track& track) const;

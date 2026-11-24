@@ -29,6 +29,9 @@
     #define EXTERN extern
 #endif
 
+#define EMU_DEBUG_SPRITE_LAYER_WIDTH 1024
+#define EMU_DEBUG_SPRITE_LAYER_HEIGHT 512
+
 enum Debug_Command
 {
     Debug_Command_Continue,
@@ -55,13 +58,19 @@ EXTERN int emu_debug_background_buffer_width[2];
 EXTERN int emu_debug_background_buffer_height[2];
 EXTERN int emu_debug_sprite_widths[2][64];
 EXTERN int emu_debug_sprite_heights[2][64];
+EXTERN u8* emu_debug_sprite_layer_buffer[2];
+EXTERN bool emu_debug_sprite_layer_enabled[2];
 EXTERN int emu_debug_tiles_palette[2];
 EXTERN Debug_Command emu_debug_command;
 EXTERN bool emu_debug_pc_changed;
 EXTERN int emu_debug_step_frames_pending;
 EXTERN u64 emu_frame_counter;
+EXTERN u64 emu_video_frame_counter;
+EXTERN bool emu_video_recording_frame_pending;
 
 EXTERN bool emu_audio_sync;
+EXTERN bool emu_audio_rate_control;
+EXTERN float emu_audio_ratio;
 EXTERN bool emu_debug_disable_breakpoints;
 EXTERN bool emu_debug_irq_breakpoints;
 
@@ -79,25 +88,29 @@ EXTERN void emu_resume(void);
 EXTERN bool emu_is_paused(void);
 EXTERN bool emu_is_debug_idle(void);
 EXTERN bool emu_is_empty(void);
-EXTERN void emu_reset(void);
+EXTERN void emu_save_persistent_data(void);
+EXTERN void emu_reset(bool save_persistent_data = true);
 EXTERN bool emu_eject_physical_cdrom(void);
-EXTERN void emu_audio_huc6280a(bool enabled);
+EXTERN void emu_audio_psg_revision(int revision);
+EXTERN void emu_audio_adpcm_clock_speed(int mode, float clock_speed);
 EXTERN void emu_audio_mute(bool mute);
 EXTERN void emu_audio_set_master_volume(float volume);
 EXTERN void emu_audio_psg_volume(float volume);
 EXTERN void emu_audio_adpcm_volume(float volume);
 EXTERN void emu_audio_cdrom_volume(float volume);
 EXTERN void emu_audio_reset(void);
-EXTERN bool emu_is_audio_enabled(void);
+EXTERN void emu_audio_restart(void);
 EXTERN bool emu_is_audio_open(void);
 EXTERN void emu_save_ram(const char* file_path);
 EXTERN void emu_load_ram(const char* file_path);
-EXTERN void emu_save_state_slot(int index);
-EXTERN void emu_load_state_slot(int index);
-EXTERN void emu_save_state_file(const char* file_path);
-EXTERN void emu_load_state_file(const char* file_path);
+EXTERN bool emu_save_state_slot(int index);
+EXTERN bool emu_load_state_slot(int index);
+EXTERN bool emu_save_state_file(const char* file_path);
+EXTERN bool emu_load_state_file(const char* file_path);
 EXTERN void update_savestates_data(void);
 EXTERN void emu_get_runtime(GG_Runtime_Info& runtime);
+EXTERN bool emu_add_cheat(const char* cheat);
+EXTERN void emu_clear_cheats(void);
 EXTERN double emu_get_frame_rate(void);
 EXTERN void emu_get_info(char* info, int buffer_size);
 EXTERN GeargrafxCore* emu_get_core(void);
@@ -106,22 +119,33 @@ EXTERN void emu_debug_step_into(void);
 EXTERN void emu_debug_step_out(void);
 EXTERN void emu_debug_step_frame(void);
 EXTERN void emu_debug_step_frames(int frames);
+EXTERN void emu_debug_state_restored(void);
 EXTERN void emu_debug_break(void);
 EXTERN void emu_debug_continue(void);
 EXTERN void emu_set_disassembler_syntax(int syntax);
 EXTERN void emu_set_palette(int palette);
-EXTERN void emu_set_custom_palette(const u8* data);
+EXTERN void emu_set_custom_palette(const u8* data, int count);
+EXTERN void emu_set_black_and_white(bool enabled);
 EXTERN void emu_video_no_sprite_limit(bool enabled);
 EXTERN void emu_set_safe_vdc_defaults(bool enabled);
 EXTERN void emu_set_overscan(int overscan);
 EXTERN void emu_set_scanline_start_end(int start, int end);
+EXTERN void emu_set_laseractive_scanlines(int mode, int start, int end);
+EXTERN void emu_set_laseractive_pixels(int mode, int start, int end);
 EXTERN void emu_set_lowpass_filter(bool enabled, float intensity, float cutoff_mhz, bool speed_5_36, bool speed_7_16, bool speed_10_8);
 EXTERN void emu_set_memory_reset_values(int mpr, int wram, int card_ram, int arcade_card);
 EXTERN void emu_set_huc6260_color_table_reset_value(int value);
 EXTERN void emu_set_huc6280_registers_reset_value(int value);
 EXTERN void emu_set_console_type(GG_Console_Type console_type);
+EXTERN void emu_set_cpu_overclock(int percent);
 EXTERN void emu_set_cdrom_type(GG_CDROM_Type cdrom_type);
+EXTERN void emu_set_cdrom_speed(int speed_index);
 EXTERN void emu_set_preload_cdrom(bool enabled);
+EXTERN void emu_set_ffwd_loads(bool enabled);
+EXTERN void emu_reset_load_ffwd(void);
+EXTERN void emu_update_load_ffwd(void);
+EXTERN bool emu_is_load_ffwd(void);
+EXTERN bool emu_is_ffwd(void);
 EXTERN void emu_set_backup_ram(bool enabled);
 EXTERN void emu_set_turbo_tap(bool enabled);
 EXTERN void emu_set_mb128_mode(GG_MB128_Mode mode);
@@ -131,15 +155,20 @@ EXTERN void emu_set_avenue_pad_3_button(GG_Controllers controller, GG_Keys butto
 EXTERN void emu_set_mouse_delta(int x, int y);
 EXTERN void emu_set_turbo(GG_Controllers controller, GG_Keys button, bool enabled);
 EXTERN void emu_set_turbo_speed(GG_Controllers controller, GG_Keys button, u8 speed);
-EXTERN void emu_save_screenshot(const char* file_path);
+EXTERN bool emu_save_screenshot(const char* file_path);
 EXTERN int emu_get_screenshot_png(unsigned char** out_buffer);
 EXTERN int emu_get_sprite_png(int vdc, int sprite_index, unsigned char** out_buffer);
-EXTERN void emu_save_sprite(const char* file_path, int vdc, int index);
-EXTERN void emu_save_background(const char* file_path, int vdc);
+EXTERN bool emu_save_sprite(const char* file_path, int vdc, int index);
+EXTERN bool emu_save_background(const char* file_path, int vdc);
 EXTERN bool emu_load_bios(const char* file_path, bool syscard);
-EXTERN void emu_start_vgm_recording(const char* file_path);
+EXTERN bool emu_load_pac_bios(const char* file_path, GG_LaserActive_Region region);
+EXTERN void emu_set_laseractive_region(GG_LaserActive_Region region);
+EXTERN bool emu_start_vgm_recording(const char* file_path);
 EXTERN void emu_stop_vgm_recording(void);
 EXTERN bool emu_is_vgm_recording(void);
+EXTERN bool emu_start_video_recording(const char* file_path);
+EXTERN void emu_stop_video_recording(void);
+EXTERN bool emu_is_video_recording(void);
 EXTERN void emu_mcp_set_transport(int mode, int tcp_port, const char* tcp_address);
 EXTERN void emu_mcp_start(void);
 EXTERN void emu_mcp_stop(void);
@@ -154,8 +183,6 @@ EXTERN void emu_turbolink_pump(void);
 EXTERN bool emu_turbolink_is_active(void);
 EXTERN bool emu_turbolink_is_core_suspended(void);
 EXTERN bool emu_turbolink_is_cable_connected(void);
-EXTERN bool emu_turbolink_has_remote_peer(void);
-EXTERN bool emu_turbolink_is_pacing_peer(void);
 EXTERN TurboLinkStatus emu_turbolink_get_status(void);
 EXTERN void emu_turbolink_reset_metrics(void);
 EXTERN void emu_turbolink_set_normal_barrier_stall_us(u32 stall_us);

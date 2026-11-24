@@ -22,6 +22,10 @@
 #include <cmath>
 #include <iomanip>
 #include <string>
+#include <vector>
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
 
 #define CONFIG_IMPORT
 #include "config.h"
@@ -64,6 +68,10 @@ static void on_config_read(int file_version);
 static void on_config_write(void);
 static char* get_portable_path(bool force_portable);
 static bool check_portable(const char* base_path);
+static void remove_stale_temp_folders(const char* temp_root_path);
+static SDL_EnumerationResult SDLCALL collect_directory_entry(void* userdata, const char* dirname, const char* fname);
+static bool is_process_running(unsigned long pid);
+static unsigned long get_process_id(void);
 static bool get_setting(const char* group, const char* key, std::string* value);
 static bool parse_int_string(const std::string& value, int* result);
 static bool parse_float_string(const std::string& value, float* result);
@@ -74,6 +82,7 @@ static void write_float(const char* group, const char* key, float value);
 static bool read_bool(const char* group, const char* key, bool default_value);
 static void write_bool(const char* group, const char* key, bool boolean);
 static void write_string(const char* group, const char* key, const std::string& value);
+static void write_shader_float(const char* group, const char* key, float value);
 static std::string shader_preset_section_name(const char* preset_file);
 
 #include "config_definitions.inc.h"
@@ -98,8 +107,16 @@ void config_init(bool force_portable)
 
     config_root_path = root_path;
 
-    strncpy_fit(config_temp_path, config_root_path, sizeof(config_temp_path));
-    strncat_fit(config_temp_path, "tmp/", sizeof(config_temp_path));
+    char temp_root_path[512];
+    strncpy_fit(temp_root_path, config_root_path, sizeof(temp_root_path));
+    strncat_fit(temp_root_path, "tmp/", sizeof(temp_root_path));
+    create_directory_if_not_exists(temp_root_path);
+    remove_stale_temp_folders(temp_root_path);
+
+    char process_folder[32];
+    snprintf(process_folder, sizeof(process_folder), "%lu/", get_process_id());
+    strncpy_fit(config_temp_path, temp_root_path, sizeof(config_temp_path));
+    strncat_fit(config_temp_path, process_folder, sizeof(config_temp_path));
     create_directory_if_not_exists(config_temp_path);
 
     strncpy_fit(config_emu_file_path, config_root_path, sizeof(config_emu_file_path));
@@ -115,6 +132,7 @@ void config_init(bool force_portable)
 
 void config_destroy(void)
 {
+    remove_directory_and_contents(config_temp_path);
     SafeDelete(config_ini_file);
     SDL_free((void*)config_root_path);
 }
@@ -124,7 +142,6 @@ void config_load_defaults(void)
     Log("Loading default settings");
 
     on_config_defaults();
-    config_write();
 }
 
 void config_push_recent_media(const std::string& path)
@@ -470,6 +487,57 @@ static bool check_portable(const char* base_path)
     return false;
 }
 
+static void remove_stale_temp_folders(const char* temp_root_path)
+{
+    std::vector<std::string> entries;
+    SDL_EnumerateDirectory(temp_root_path, collect_directory_entry, &entries);
+
+    for (size_t i = 0; i < entries.size(); i++)
+    {
+        const char* name = entries[i].c_str();
+        char* end = NULL;
+        unsigned long pid = strtoul(name, &end, 10);
+
+        if ((end != name) && (*end == '\0') && is_process_running(pid))
+            continue;
+
+        std::string path = std::string(temp_root_path) + entries[i];
+        remove_directory_and_contents(path.c_str());
+    }
+}
+
+static SDL_EnumerationResult SDLCALL collect_directory_entry(void* userdata, const char* dirname, const char* fname)
+{
+    UNUSED(dirname);
+    ((std::vector<std::string>*)userdata)->push_back(fname);
+    return SDL_ENUM_CONTINUE;
+}
+
+static bool is_process_running(unsigned long pid)
+{
+#if defined(_WIN32)
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+
+    if (process == NULL)
+        return GetLastError() == ERROR_ACCESS_DENIED;
+
+    bool running = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+    CloseHandle(process);
+    return running;
+#else
+    return (kill((pid_t)pid, 0) == 0) || (errno == EPERM);
+#endif
+}
+
+static unsigned long get_process_id(void)
+{
+#if defined(_WIN32)
+    return (unsigned long)GetCurrentProcessId();
+#else
+    return (unsigned long)getpid();
+#endif
+}
+
 static bool get_setting(const char* group, const char* key, std::string* value)
 {
     if (!value || !config_ini_data.has(group))
@@ -603,6 +671,16 @@ static void write_string(const char* group, const char* key, const std::string& 
     Debug("Save string setting: [%s][%s]=%s", group, key, value.c_str());
 }
 
+static void write_shader_float(const char* group, const char* key, float value)
+{
+    std::ostringstream oss;
+    oss.imbue(std::locale::classic());
+    oss << std::setprecision(6) << value;
+    std::string value_str = oss.str();
+    config_ini_data[group][key] = value_str;
+    Debug("Save float setting: [%s][%s]=%s", group, key, value_str.c_str());
+}
+
 static std::string shader_preset_section_name(const char* preset_file)
 {
     return std::string("ShaderPreset.") + get_filename(preset_file);
@@ -630,7 +708,37 @@ void config_write_shader_parameter(const char* preset_file, const char* paramete
         return;
 
     std::string section = shader_preset_section_name(preset_file);
-    write_float(section.c_str(), parameter_name, value);
+    write_shader_float(section.c_str(), parameter_name, value);
+}
+
+bool config_read_shader_variant(const char* preset_file, std::string& variant)
+{
+    variant.clear();
+
+    if (!preset_file || preset_file[0] == '\0')
+        return false;
+
+    std::string section = shader_preset_section_name(preset_file);
+
+    if (!config_ini_data.has(section))
+        return false;
+
+    mINI::INIMap<std::string> parameters = config_ini_data.get(section);
+
+    if (!parameters.has("Variant"))
+        return false;
+
+    variant = parameters.get("Variant");
+    return !variant.empty();
+}
+
+void config_write_shader_variant(const char* preset_file, const char* variant)
+{
+    if (!preset_file || preset_file[0] == '\0' || !variant)
+        return;
+
+    std::string section = shader_preset_section_name(preset_file);
+    write_string(section.c_str(), "Variant", variant);
 }
 
 void config_update_hotkey_string(config_Hotkey* hotkey)
@@ -643,14 +751,25 @@ void config_update_hotkey_string(config_Hotkey* hotkey)
 
     std::string result = "";
 
+#if defined(__APPLE__)
+    const char* gui_label = "Cmd+";
+    const char* alt_label = "Option+";
+#elif defined(_WIN32)
+    const char* gui_label = "Win+";
+    const char* alt_label = "Alt+";
+#else
+    const char* gui_label = "Super+";
+    const char* alt_label = "Alt+";
+#endif
+
+    if (hotkey->mod & (SDL_KMOD_GUI | SDL_KMOD_LGUI | SDL_KMOD_RGUI))
+        result += gui_label;
     if (hotkey->mod & (SDL_KMOD_CTRL | SDL_KMOD_LCTRL | SDL_KMOD_RCTRL))
         result += "Ctrl+";
     if (hotkey->mod & (SDL_KMOD_SHIFT | SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT))
         result += "Shift+";
     if (hotkey->mod & (SDL_KMOD_ALT | SDL_KMOD_LALT | SDL_KMOD_RALT))
-        result += "Alt+";
-    if (hotkey->mod & (SDL_KMOD_GUI | SDL_KMOD_LGUI | SDL_KMOD_RGUI))
-        result += "Cmd+";
+        result += alt_label;
 
     const char* key_name = SDL_GetScancodeName(hotkey->key);
     if (key_name && strlen(key_name) > 0)

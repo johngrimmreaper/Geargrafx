@@ -24,21 +24,28 @@
 #include "../emu.h"
 #include "../gui.h"
 #include "../gui_actions.h"
+#include "../gui_cheats.h"
 #include "../gui_debug_constants.h"
 #include "../gui_debug_disassembler.h"
 #include "../gui_debug_memory.h"
 #include "../gui_debug_memeditor.h"
 #include "../gui_debug_rewind.h"
 #include "../gui_debug_trace_logger.h"
+#include "../gui_debug_profiler.h"
 #include "../trace_logger_formatter.h"
 #include "../config.h"
 #include "../events.h"
 #include "../rewind.h"
+#include "../video_recorder.h"
 #include <cstring>
+#include <cctype>
+#include <cmath>
 #include <sstream>
 #include <iomanip>
 #include <vector>
 #include <algorithm>
+#include "mmi_archive.h"
+#include "laseractive.h"
 
 static const int k_mcp_mouse_motion_step = 4;
 
@@ -91,13 +98,23 @@ static bool resolve_mcp_disassembly_label(GG_Disassembler_Record* record,
     u16 label_lookup = is_zp ? (0x2000 | address) : address;
     u16 hardware_offset = label_lookup & 0xE000;
 
-    for (int i = 0; i < k_debug_label_count; i++)
+    const stDebugLabel* labels = k_debug_labels;
+    int label_count = k_debug_label_count;
+    u16 offset = label_lookup - hardware_offset;
+    if (emu_get_core()->GetMedia()->IsLaserActive() &&
+        ((offset >= 0x18C0 && offset <= 0x18C3) || (offset >= 0x1920 && offset <= 0x195F)))
     {
-        if (k_debug_labels[i].address + hardware_offset == label_lookup)
+        labels = k_debug_laseractive_labels;
+        label_count = k_debug_laseractive_label_count;
+    }
+
+    for (int i = 0; i < label_count; i++)
+    {
+        if (labels[i].address + hardware_offset == label_lookup)
         {
             char replacement[64];
             snprintf(replacement, sizeof(replacement), "%s_%04X",
-                k_debug_labels[i].label, address);
+                labels[i].label, address);
             return replace_mcp_disassembly_operand(record, instruction, replacement);
         }
     }
@@ -130,6 +147,18 @@ static double cdrom_cycles_to_ms(s32 cycles)
         return 0.0;
 
     return (double)cycles * 1000.0 / (double)GG_MASTER_CLOCK_RATE;
+}
+
+static json cheat_to_json(int index, const gui_CheatEntry* entry)
+{
+    json cheat;
+    cheat["index"] = index;
+    cheat["code"] = entry->code;
+    cheat["description"] = entry->description;
+    cheat["enabled"] = entry->enabled;
+    cheat["valid"] = entry->valid;
+    cheat["active"] = entry->active;
+    return cheat;
 }
 
 static bool is_mouse_motion_button(const std::string& button)
@@ -298,41 +327,6 @@ std::vector<BreakpointInfo> DebugAdapter::ListBreakpoints()
     }
 
     return result;
-}
-
-RegistersSnapshot DebugAdapter::GetRegisters()
-{
-    Debug("[MCP] GetRegisters: start");
-
-    Debug("[MCP] GetRegisters: m_core = %p", (void*)m_core);
-
-    HuC6280* cpu = m_core->GetHuC6280();
-    Debug("[MCP] GetRegisters: cpu = %p", (void*)cpu);
-
-    HuC6280::HuC6280_State* state = cpu->GetState();
-    Debug("[MCP] GetRegisters: state = %p", (void*)state);
-
-    Debug("[MCP] GetRegisters: creating snapshot");
-    RegistersSnapshot snapshot;
-
-    Debug("[MCP] GetRegisters: reading PC (ptr=%p)", (void*)state->PC);
-    snapshot.PC = state->PC->GetValue();
-
-    Debug("[MCP] GetRegisters: reading A (ptr=%p)", (void*)state->A);
-    snapshot.A = state->A->GetValue();
-    snapshot.X = state->X->GetValue();
-    snapshot.Y = state->Y->GetValue();
-    snapshot.S = state->S->GetValue();
-    snapshot.P = state->P->GetValue();
-    snapshot.SPEED = *state->SPEED;
-    snapshot.TIMER = *state->TIMER;
-    snapshot.TIMER_COUNTER = *state->TIMER_COUNTER;
-    snapshot.TIMER_RELOAD = *state->TIMER_RELOAD;
-    snapshot.IDR = *state->IDR;
-    snapshot.IRR = *state->IRR;
-
-    Debug("[MCP] GetRegisters: done (PC=%04X)", snapshot.PC);
-    return snapshot;
 }
 
 void DebugAdapter::SetRegister(const std::string& name, u32 value)
@@ -712,12 +706,12 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
             info.size = 0x100;
             break;
         case MEMORY_EDITOR_ROM:
-            info.name = "ROM";
-            info.data = media->GetROM();
-            info.size = media->GetROMSize();
+            info.name = media->IsLaserActive() ? "BIOS" : "ROM";
+            info.data = media->IsLaserActive() ? media->GetMappedBios() : media->GetROM();
+            info.size = media->IsLaserActive() ? media->GetMappedBiosSize() : media->GetROMSize();
             break;
         case MEMORY_EDITOR_CARD_RAM:
-            info.name = "CARD RAM";
+            info.name = media->IsLaserActive() ? "PAC SRAM" : "CARD RAM";
             info.data = memory->GetCardRAM();
             info.size = memory->GetCardRAMSize();
             break;
@@ -763,7 +757,7 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
             }
             break;
         case MEMORY_EDITOR_CDROM_RAM:
-            if (media->IsCDROM())
+            if (media->IsCDROMHardwareEnabled())
             {
                 info.name = "CDROM RAM";
                 info.data = memory->GetCDROMRAM();
@@ -771,7 +765,7 @@ MemoryAreaInfo DebugAdapter::GetMemoryAreaInfo(int area)
             }
             break;
         case MEMORY_EDITOR_ADPCM_RAM:
-            if (media->IsCDROM())
+            if (media->IsCDROMHardwareEnabled())
             {
                 info.name = "ADPCM";
                 info.data = adpcm->GetRAM();
@@ -821,6 +815,8 @@ json DebugAdapter::GetMediaInfo()
     info["is_hes"] = media->IsHES();
     info["is_sgx"] = media->IsSGX();
     info["is_cdrom"] = media->IsCDROM();
+    info["is_cdrom_hardware_enabled"] = media->IsCDROMHardwareEnabled();
+    info["laseractive"] = media->IsLaserActive();
     info["is_gameexpress"] = media->IsGameExpress();
     info["is_arcade_card"] = media->IsArcadeCard();
     info["is_mb128"] = media->IsMB128();
@@ -848,26 +844,32 @@ json DebugAdapter::GetMediaInfo()
             break;
     }
 
-    if (media->IsCDROM())
+    if (media->IsCDROMHardwareEnabled())
     {
-        GG_CDROM_Type cdrom_type = media->GetCDROMType();
-        switch (cdrom_type)
+        if (media->IsLaserActive())
+            info["cdrom_type"] = "LaserActive LD-ROM²";
+        else
         {
-            case GG_CDROM_AUTO:
-                info["cdrom_type"] = media->IsArcadeCard() ? "Arcade CD-ROM²" : "Super CD-ROM²";
-                break;
-            case GG_CDROM_STANDARD:
-                info["cdrom_type"] = "CD-ROM²";
-                break;
-            case GG_CDROM_SUPER_CDROM:
-                info["cdrom_type"] = "Super CD-ROM²";
-                break;
-            case GG_CDROM_ARCADE_CARD:
-                info["cdrom_type"] = "Arcade CD-ROM²";
-                break;
-            default:
-                info["cdrom_type"] = "Unknown";
-                break;
+            GG_CDROM_Type cdrom_type = media->GetCDROMType();
+            switch (cdrom_type)
+            {
+                case GG_CDROM_AUTO:
+                    info["cdrom_type"] = media->IsArcadeCard() ? "Arcade CD-ROM²" :
+                        (media->GetCardRAMSize() > 0 ? "Super CD-ROM²" : "CD-ROM²");
+                    break;
+                case GG_CDROM_STANDARD:
+                    info["cdrom_type"] = "CD-ROM²";
+                    break;
+                case GG_CDROM_SUPER_CDROM:
+                    info["cdrom_type"] = "Super CD-ROM²";
+                    break;
+                case GG_CDROM_ARCADE_CARD:
+                    info["cdrom_type"] = "Arcade CD-ROM²";
+                    break;
+                default:
+                    info["cdrom_type"] = "Unknown";
+                    break;
+            }
         }
     }
 
@@ -892,9 +894,60 @@ json DebugAdapter::GetMediaInfo()
     info["loaded_bios"] = bios_ready;
     if (bios_ready)
     {
-        bool syscard = !media->IsGameExpress();
-        info["bios_name"] = media->GetBiosName(syscard);
-        info["valid_bios"] = syscard ? media->IsSyscardBiosValid() : media->IsGameExpressBiosValid();
+        if (media->IsLaserActive())
+        {
+            const GG_MmiInfo* mmi = m_core->GetCDROMMedia()->GetMmiInfo();
+            if (mmi && (mmi->card == "System Card 1.0"))
+            {
+                info["bios_name"] = media->GetBiosName(true);
+                info["valid_bios"] = media->IsSyscardBiosValid();
+                info["laseractive_card"] = mmi->card;
+            }
+            else if (mmi && (mmi->card == "Games Express"))
+            {
+                info["bios_name"] = media->GetBiosName(false);
+                info["valid_bios"] = media->IsGameExpressBiosValid();
+                info["laseractive_card"] = mmi->card;
+            }
+            else
+            {
+                GG_LaserActive_Region region = media->GetSelectedLaserActiveRegion();
+                info["bios_name"] = media->GetPacBiosName(region);
+                info["valid_bios"] = media->IsPacBiosValid(region);
+                info["bios_crc32"] = media->GetPacBiosCRC(region);
+                info["laseractive_region"] = region == GG_LASERACTIVE_REGION_US ? "US" : "Japan";
+            }
+        }
+        else
+        {
+            bool syscard = !media->IsGameExpress();
+            info["bios_name"] = media->GetBiosName(syscard);
+            info["valid_bios"] = syscard ? media->IsSyscardBiosValid() : media->IsGameExpressBiosValid();
+        }
+    }
+
+    if (m_core->GetCDROMMedia()->IsMmi())
+    {
+        CdRomMedia* cdrom_media = m_core->GetCDROMMedia();
+        const GG_MmiInfo* mmi = cdrom_media->GetMmiInfo();
+        const GG_MmiMediaInfo* selected = cdrom_media->GetSelectedMmiMedia();
+        info["mmi_media_count"] = mmi ? mmi->media.size() : 0;
+        info["mmi_ejected"] = cdrom_media->IsMmiEjected();
+        if (mmi)
+        {
+            info["mmi_system"] = mmi->system;
+            info["mmi_catalog_id"] = mmi->catalog_id;
+            info["mmi_region_code"] = mmi->region_code;
+        }
+        if (selected)
+        {
+            info["mmi_selected_name"] = selected->name;
+            info["mmi_selected_sequence"] = selected->sequence_number;
+            info["mmi_selected_volume"] = selected->volume_number;
+            info["mmi_selected_side"] = selected->side_number;
+            info["mmi_selected_type"] = selected->type;
+            info["mmi_selected_format"] = selected->format;
+        }
     }
 
     info["backup_ram_forced"] = media->IsBackupRAMForced();
@@ -904,6 +957,62 @@ json DebugAdapter::GetMediaInfo()
         info["softpatch_path"] = media->GetSoftpatchPath();
 
     return info;
+}
+
+json DebugAdapter::ListMmiMedia()
+{
+    json result;
+    const GG_MmiInfo* info = m_core->GetCDROMMedia()->GetMmiInfo();
+    if (!info)
+        return {{"error", "No MMI media loaded"}};
+
+    json media = json::array();
+    for (size_t i = 0; i < info->media.size(); i++)
+    {
+        const GG_MmiMediaInfo& item = info->media[i];
+        media.push_back({
+            {"index", i},
+            {"name", item.name},
+            {"sequence", item.sequence_number},
+            {"volume", item.volume_number},
+            {"side", item.side_number},
+            {"type", item.type},
+            {"format", item.format},
+            {"selected", i == m_core->GetCDROMMedia()->GetSelectedMmiMediaIndex()}
+        });
+    }
+    result["ejected"] = m_core->GetCDROMMedia()->IsMmiEjected();
+    result["media"] = media;
+    return result;
+}
+
+json DebugAdapter::EjectMmiMedia()
+{
+    if (!m_core->EjectLaserDisc())
+        return {{"error", "Unable to eject MMI media"}};
+    emu_audio_reset();
+    rewind_reset();
+    return {{"success", true}, {"ejected", true}};
+}
+
+json DebugAdapter::InsertMmiMedia()
+{
+    if (!m_core->InsertLaserDisc())
+        return {{"error", "Unable to insert MMI media"}};
+    emu_audio_reset();
+    rewind_reset();
+    return {{"success", true}, {"ejected", false}};
+}
+
+json DebugAdapter::SelectMmiMedia(u32 index)
+{
+    if (!m_core->GetCDROMMedia()->IsMmiEjected())
+        return {{"error", "Eject MMI media before selecting a side"}};
+    if (!m_core->SelectLaserDiscMedia(index))
+        return {{"error", "Invalid or unloadable MMI media index"}};
+    emu_audio_reset();
+    rewind_reset();
+    return {{"success", true}, {"index", index}, {"ejected", true}};
 }
 
 json DebugAdapter::ListRecentMedia()
@@ -1326,7 +1435,7 @@ json DebugAdapter::GetPSGStatus()
 
 json DebugAdapter::GetCDROMStatus()
 {
-    if (!m_core->GetMedia()->IsCDROM())
+    if (!m_core->GetMedia()->IsCDROMHardwareEnabled())
         return json::object();
 
     json status;
@@ -1395,6 +1504,37 @@ json DebugAdapter::GetCDROMStatus()
     snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", length.minutes, length.seconds, length.frames);
     status["length"] = time_str;
     status["sector_count"] = cdrom_media->GetSectorCount();
+
+    if (m_core->GetMedia()->IsLaserActive())
+    {
+        LaserActive::Status laseractive;
+        m_core->GetLaserActive()->GetStatus(laseractive);
+        status["laseractive"] = true;
+        status["laseractive_head_lba"] = laseractive.head_lba;
+        status["laseractive_seek_latency"] = laseractive.seek_latency;
+        status["laseractive_track"] = laseractive.current_track;
+        status["laseractive_drive_state"] = laseractive.current_drive_state;
+        status["laseractive_paused"] = laseractive.paused;
+        status["laseractive_sram_enabled"] = laseractive.sram_enabled;
+        status["laseractive_ejected"] = laseractive.ejected;
+        status["laseractive_drive_mode"] = (int)laseractive.drive_mode;
+        status["laseractive_sample"] = laseractive.sample;
+        status["laseractive_video_frame"] = laseractive.video_frame;
+        status["laseractive_search_sectors"] = laseractive.search_sectors;
+        status["laseractive_analog_fade_samples_left"] = laseractive.analog_fade_samples_left;
+        status["laseractive_analog_fade_samples_right"] = laseractive.analog_fade_samples_right;
+        status["laseractive_analog_muted_left"] = laseractive.analog_muted_left;
+        status["laseractive_analog_muted_right"] = laseractive.analog_muted_right;
+        status["pd6103a_input_frozen"] = laseractive.input_frozen;
+        status["pd6103a_output_frozen"] = laseractive.output_frozen;
+        status["pd6103a_input"] = json::array();
+        status["pd6103a_output"] = json::array();
+        for (int i = 0; i < 0x20; i++)
+        {
+            status["pd6103a_input"].push_back(laseractive.input_registers[i]);
+            status["pd6103a_output"].push_back(laseractive.output_registers[i]);
+        }
+    }
 
     return status;
 }
@@ -1552,7 +1692,7 @@ json DebugAdapter::GetArcadeCardStatus()
 
 json DebugAdapter::GetCDROMAudioStatus()
 {
-    if (!m_core->GetMedia()->IsCDROM())
+    if (!m_core->GetMedia()->IsCDROMHardwareEnabled())
         return json::object();
 
     json status;
@@ -1560,7 +1700,13 @@ json DebugAdapter::GetCDROMAudioStatus()
     CdRomMedia* cdrom_media = m_core->GetCDROMMedia();
     CdRomAudio* cdrom_audio = m_core->GetCDROMAudio();
     CdRomAudio::CdRomAudio_State* cdrom_audio_state = cdrom_audio->GetState();
-    u32 current_lba = *cdrom_audio_state->CURRENT_LBA;
+    bool is_laseractive = m_core->GetMedia()->IsLaserActive();
+    LaserActive::Status laseractive = {};
+    if (is_laseractive)
+        m_core->GetLaserActive()->GetStatus(laseractive);
+    CdRomAudio::CdAudioState current_state = cdrom_audio->GetCurrentState();
+    u32 current_lba = is_laseractive ? (u32)MAX(laseractive.head_lba, 0) :
+        *cdrom_audio_state->CURRENT_LBA;
     s32 current_track = cdrom_media->FindTrackFromLBA(current_lba, true);
     const std::vector<CdRomImage::Track>& tracks = cdrom_media->GetTracks();
     const CdRomImage::Track* track = NULL;
@@ -1570,19 +1716,19 @@ json DebugAdapter::GetCDROMAudioStatus()
 
     // State
     const char* state_names[] = { "PLAYING", "IDLE", "PAUSED", "STOPPED" };
-    status["state"] = state_names[*cdrom_audio_state->CURRENT_STATE];
+    status["state"] = state_names[current_state];
 
     // Stop event
     const char* stop_event_names[] = { "STOP", "LOOP", "IRQ" };
     status["stop_event"] = stop_event_names[*cdrom_audio_state->STOP_EVENT];
 
     bool audio_sector = cdrom_media->IsAudioSector(current_lba);
-    bool audible = (*cdrom_audio_state->CURRENT_STATE == CdRomAudio::CD_AUDIO_STATE_PLAYING) &&
+    bool audible = (current_state == CdRomAudio::CD_AUDIO_STATE_PLAYING) &&
         (*cdrom_audio_state->SEEK_CYCLES <= 0) &&
         (*cdrom_audio_state->PLAYBACK_DELAY_CYCLES <= 0) && audio_sector;
     const char* output_state = "SILENT";
 
-    if (*cdrom_audio_state->CURRENT_STATE == CdRomAudio::CD_AUDIO_STATE_PLAYING)
+    if (current_state == CdRomAudio::CD_AUDIO_STATE_PLAYING)
     {
         if (*cdrom_audio_state->SEEK_CYCLES > 0)
             output_state = "SEEKING";
@@ -1656,12 +1802,30 @@ json DebugAdapter::GetCDROMAudioStatus()
     status["fader_speed"] = fader_enabled ? (IS_SET_BIT(fader, 2) ? "FAST" : "SLOW") : "NONE";
     status["fader_gain"] = fader_cd_audio ? cdrom->GetFaderValue() : 1.0;
 
+    if (is_laseractive)
+    {
+        static const char* modes[] = { "INACTIVE", "SEEKING", "READING", "PLAYING", "PAUSED", "STOPPED" };
+        status["laseractive"] = true;
+        status["state"] = modes[laseractive.drive_mode];
+        status["current_lba"] = laseractive.head_lba;
+        status["current_track"] = laseractive.current_track;
+        status["current_sample"] = laseractive.sample;
+        status["seek_ms"] = laseractive.seek_latency * (1000.0 / 75.0);
+        status["seek_cycles"] = (u64)laseractive.seek_latency * GG_MASTER_CLOCK_RATE / 75;
+        status["playback_delay_ms"] = 0;
+        status["playback_delay_cycles"] = 0;
+        status["audible"] = cdrom_audio->GetLeftSample() != 0 || cdrom_audio->GetRightSample() != 0;
+        status["output_state"] = laseractive.drive_mode == LaserActive::DRIVE_SEEKING ? "SEEKING" :
+            (status["audible"].get<bool>() ? "AUDIBLE" : "SILENT");
+        format_cdrom_signed_msf(laseractive.head_lba, current_msf, sizeof(current_msf));
+        status["current_position_msf"] = current_msf;
+    }
     return status;
 }
 
 json DebugAdapter::GetADPCMStatus()
 {
-    if (!m_core->GetMedia()->IsCDROM())
+    if (!m_core->GetMedia()->IsCDROMHardwareEnabled())
         return json::object();
 
     json status;
@@ -1684,7 +1848,7 @@ json DebugAdapter::GetADPCMStatus()
 
     status["length"] = *adpcm_state->LENGTH;
 
-    float frequency = (32000.0f / (16.0f - (float)*adpcm_state->SAMPLE_RATE)) / 1000.0f;
+    float frequency = (float)((adpcm->GetClockSpeed() / (16 - (*adpcm_state->SAMPLE_RATE & 0x0F))) / 1000.0);
     status["frequency_khz"] = frequency;
 
     // Registers
@@ -1746,6 +1910,96 @@ json DebugAdapter::GetScreenshot()
     result["mimeType"] = "image/png";
     result["width"] = runtime.screen_width;
     result["height"] = runtime.screen_height;
+
+    return result;
+}
+
+static const char* const k_video_recording_ratios[] = { "screen", "square", "4:3", "16:9", "16:10", "6:5" };
+static const char* const k_video_recording_qualities[] = { "low", "medium", "high", "lossless", "lossless_compressed" };
+static const int k_video_recording_ratio_count = sizeof(k_video_recording_ratios) / sizeof(k_video_recording_ratios[0]);
+static const int k_video_recording_quality_count = sizeof(k_video_recording_qualities) / sizeof(k_video_recording_qualities[0]);
+
+static int find_video_recording_option(const std::string& value, const char* const* options, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (value == options[i])
+            return i;
+    }
+    return -1;
+}
+
+json DebugAdapter::StartVideoRecording(const std::string& file_path, int scale, const std::string& aspect_ratio, const std::string& quality)
+{
+    json result;
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        Log("[MCP] StartVideoRecording failed: No media loaded");
+        return result;
+    }
+
+    if (emu_is_video_recording())
+    {
+        result["error"] = "Video recording is already active";
+        return result;
+    }
+
+    int ratio = aspect_ratio.empty() ? config_video.recording_ratio : find_video_recording_option(aspect_ratio, k_video_recording_ratios, k_video_recording_ratio_count);
+    int quality_index = quality.empty() ? config_video.recording_quality : find_video_recording_option(quality, k_video_recording_qualities, k_video_recording_quality_count);
+
+    if ((scale != 0) && ((scale < 1) || (scale > 20)))
+    {
+        result["error"] = "Invalid scale";
+        return result;
+    }
+
+    if ((ratio < 0) || (quality_index < 0))
+    {
+        result["error"] = "Invalid aspect ratio or quality";
+        return result;
+    }
+
+    if (scale != 0)
+        config_video.recording_scale = scale;
+    config_video.recording_ratio = ratio;
+    config_video.recording_quality = quality_index;
+
+    if (!gui_action_start_video_recording(file_path.empty() ? NULL : file_path.c_str()))
+    {
+        result["error"] = "Failed to start video recording";
+        Log("[MCP] StartVideoRecording failed: %s", file_path.c_str());
+        return result;
+    }
+
+    result["success"] = true;
+    result["file_path"] = video_recorder_get_file_path();
+    result["scale"] = config_video.recording_scale;
+    result["aspect_ratio"] = k_video_recording_ratios[config_video.recording_ratio];
+    result["quality"] = k_video_recording_qualities[config_video.recording_quality];
+
+    return result;
+}
+
+json DebugAdapter::StopVideoRecording()
+{
+    json result;
+
+    if (!emu_is_video_recording())
+    {
+        result["error"] = "Video recording is not active";
+        return result;
+    }
+
+    std::string file_path = video_recorder_get_file_path();
+    u32 frames = video_recorder_get_frame_count();
+
+    gui_action_stop_video_recording();
+
+    result["success"] = true;
+    result["file_path"] = file_path;
+    result["frames"] = frames;
 
     return result;
 }
@@ -1840,6 +2094,26 @@ json DebugAdapter::LoadBios(const std::string& file_path, bool syscard)
         result["warning"] = "CRC does not match any known BIOS";
 
     return result;
+}
+
+json DebugAdapter::LoadPacBios(const std::string& file_path, GG_LaserActive_Region region)
+{
+    if (file_path.empty())
+        return {{"error", "File path is required"}};
+    if (!emu_load_pac_bios(file_path.c_str(), region))
+        return {{"error", "Failed to load LaserActive BIOS file"}};
+
+    Media* media = m_core->GetMedia();
+    if (media->IsLaserActive())
+        gui_action_reset();
+    return {
+        {"success", true},
+        {"file_path", file_path},
+        {"type", region == GG_LASERACTIVE_REGION_US ? "pac_us" : "pac_japan"},
+        {"valid_crc", media->IsPacBiosValid(region)},
+        {"bios_name", media->GetPacBiosName(region)},
+        {"crc32", media->GetPacBiosCRC(region)}
+    };
 }
 
 json DebugAdapter::LoadSymbols(const std::string& file_path)
@@ -2033,15 +2307,12 @@ json DebugAdapter::LoadStateFile(const std::string& file_path)
         return result;
     }
 
-    if (!m_core->LoadState(file_path.c_str()))
+    if (!emu_load_state_file(file_path.c_str()))
     {
         result["error"] = "Failed to load state file";
         Log("[MCP] LoadStateFile failed: %s", file_path.c_str());
         return result;
     }
-
-    events_sync_input();
-    rewind_reset();
 
     result["success"] = true;
     result["file_path"] = file_path;
@@ -3468,6 +3739,12 @@ json DebugAdapter::MemoryFind(int area, const std::string& value, bool text, boo
 json DebugAdapter::GetTraceLog(s64 start, int count)
 {
     json result;
+    const char* stop_reason = gui_debug_trace_logger_get_stop_reason();
+    result["enabled"] = gui_debug_trace_logger_is_enabled();
+
+    if (IsValidPointer(stop_reason))
+        result["stopped_by"] = stop_reason;
+
 
     TraceLogger* tl = m_core->GetTraceLogger();
     if (!tl)
@@ -3550,8 +3827,10 @@ json DebugAdapter::GetTraceLog(s64 start, int count)
 
 json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& output,
     const std::string& memory_size, const std::string& disk_size,
-    const std::string& output_path, const u32* event_filters)
+    const std::string& output_path, const u32* event_filters,
+    const std::string& vblank_watch_address, const std::string& vblank_watch_operation)
 {
+    static const char* const k_vblank_watch_operations[] = { "read", "write", "read_write" };
     json result;
 
     TraceLogger* tl = m_core->GetTraceLogger();
@@ -3599,6 +3878,34 @@ json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& outpu
             }
         }
 
+        int vblank_watch_address_value = config_debug.trace_vblank_watch_address;
+        if (!vblank_watch_address.empty())
+        {
+            u16 address = 0;
+            if (!parse_hex_with_prefix(vblank_watch_address, &address))
+            {
+                result["error"] = "Invalid vblank watch address";
+                return result;
+            }
+            vblank_watch_address_value = address;
+        }
+
+        int vblank_watch_operation_value = config_debug.trace_vblank_watch_operation;
+        if (!vblank_watch_operation.empty())
+        {
+            vblank_watch_operation_value = -1;
+            for (int i = 0; i < 3; i++)
+            {
+                if (vblank_watch_operation == k_vblank_watch_operations[i])
+                    vblank_watch_operation_value = i;
+            }
+            if (vblank_watch_operation_value < 0)
+            {
+                result["error"] = "Invalid vblank watch operation";
+                return result;
+            }
+        }
+
         bool configuration_changed = output_value != config_debug.trace_output;
         if (output_value == gui_TraceOutput_Memory)
             configuration_changed = configuration_changed || memory_size_value != config_debug.trace_capacity;
@@ -3629,6 +3936,8 @@ json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& outpu
         }
 
         gui_debug_trace_logger_set_event_filters(event_filters);
+        config_debug.trace_vblank_watch_address = vblank_watch_address_value;
+        config_debug.trace_vblank_watch_operation = vblank_watch_operation_value;
 
         if (!gui_debug_trace_logger_start(flags))
         {
@@ -3659,6 +3968,9 @@ json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& outpu
         if ((vdc & TRACE_VDC_FILTER_REGISTERS) == TRACE_VDC_FILTER_REGISTERS) event_filter_list.push_back("vdc.registers");
         if ((vdc & TRACE_VDC_FILTER_IRQS) == TRACE_VDC_FILTER_IRQS) event_filter_list.push_back("vdc.irqs");
         if ((vdc & TRACE_VDC_FILTER_DMA) == TRACE_VDC_FILTER_DMA) event_filter_list.push_back("vdc.dma");
+        if ((vdc & TRACE_VDC_FILTER_SPRITE_BUDGET) != 0) event_filter_list.push_back("vdc.sprite_budget");
+        if ((vdc & TRACE_VDC_FILTER_SPRITE_LIMIT) != 0) event_filter_list.push_back("vdc.sprite_limit");
+        if ((vdc & TRACE_VDC_FILTER_MISSED_VBLANK) != 0) event_filter_list.push_back("vdc.missed_vblank");
         if ((vce & TRACE_VCE_FILTER_REGISTERS) == TRACE_VCE_FILTER_REGISTERS) event_filter_list.push_back("vce.registers");
         if ((vce & TRACE_VCE_FILTER_TIMING) == TRACE_VCE_FILTER_TIMING) event_filter_list.push_back("vce.timing");
         if ((input & TRACE_INPUT_FILTER_READS) != 0) event_filter_list.push_back("input.reads");
@@ -3703,6 +4015,14 @@ json DebugAdapter::SetTraceLog(bool enabled, u32 flags, const std::string& outpu
         if ((system & TRACE_SYSTEM_FILTER_MAPPER) != 0) event_filter_list.push_back("system.mapper");
         if ((system & TRACE_SYSTEM_FILTER_INTERRUPTS) == TRACE_SYSTEM_FILTER_INTERRUPTS) event_filter_list.push_back("system.interrupts");
         result["filters"] = event_filter_list;
+
+        if ((vdc & TRACE_VDC_FILTER_MISSED_VBLANK) != 0)
+        {
+            char address[8];
+            snprintf(address, sizeof(address), "%04X", config_debug.trace_vblank_watch_address);
+            result["vblank_watch_address"] = address;
+            result["vblank_watch_operation"] = k_vblank_watch_operations[config_debug.trace_vblank_watch_operation];
+        }
     }
     else
     {
@@ -3771,5 +4091,271 @@ json DebugAdapter::RewindSeek(int snapshot)
     result["total"] = count;
     result["age_seconds"] = (double)(age * fps) / 60.0;
     result["pc"] = ss.str();
+    return result;
+}
+
+struct ProfilerEntry
+{
+    u32 index;
+    u64 key;
+    std::string name;
+    const char* symbol;
+};
+
+static const char* const k_profiler_type_names[] = { "root", "call", "irq" };
+
+static bool profiler_entry_compare(const ProfilerEntry& a, const ProfilerEntry& b)
+{
+    if (a.key != b.key)
+        return a.key > b.key;
+    return a.index < b.index;
+}
+
+static double profiler_round(double value)
+{
+    return floor((value * 100.0) + 0.5) / 100.0;
+}
+
+json DebugAdapter::SetProfiler(const std::string& action)
+{
+    json result;
+
+    Profiler* profiler = m_core->GetProfiler();
+    if (!IsValidPointer(profiler))
+    {
+        result["error"] = "Profiler not available";
+        return result;
+    }
+
+    if (action == "start")
+    {
+        if (!config_debug.debug)
+        {
+            config_debug.debug = true;
+            emu_debug_continue();
+        }
+        gui_debug_profiler_show(true);
+    }
+    else if (action == "stop")
+        gui_debug_profiler_show(false);
+    else if (action == "reset")
+    {
+        profiler->Reset();
+        gui_debug_profiler_reset();
+    }
+    else
+    {
+        result["error"] = "Invalid profiler action";
+        return result;
+    }
+
+    result["success"] = true;
+    result["action"] = action;
+    result["window_open"] = config_debug.show_profiler;
+    return result;
+}
+
+json DebugAdapter::GetProfilerData(const std::string& sort, int count, const std::string& filter)
+{
+    json result;
+
+    Profiler* profiler = m_core->GetProfiler();
+    if (!IsValidPointer(profiler) || !IsValidPointer(profiler->GetFunctions()))
+    {
+        result["error"] = "Profiler not available";
+        return result;
+    }
+
+    if (count < 1)
+        count = 50;
+    if (count > 1000)
+        count = 1000;
+
+    profiler->Sync();
+
+    const GG_Profiler_Function* functions = profiler->GetFunctions();
+    u32 function_count = profiler->GetFunctionCount();
+    u64 total = profiler->GetTotalCycles();
+    u32 frame_cycles = gui_debug_profiler_get_frame_cycles();
+    double frames = (frame_cycles > 0) ? (double)total / (double)frame_cycles : 0.0;
+
+    std::string filter_upper = filter;
+    std::transform(filter_upper.begin(), filter_upper.end(), filter_upper.begin(), ::toupper);
+
+    std::vector<ProfilerEntry> entries;
+
+    for (u32 i = 0; i < function_count; i++)
+    {
+        const GG_Profiler_Function& function = functions[i];
+        bool pseudo = (function.type == PROFILER_FUNCTION_ROOT);
+
+        ProfilerEntry entry;
+        entry.index = i;
+        entry.key = 0;
+        entry.symbol = "none";
+
+        if (function.type == PROFILER_FUNCTION_ROOT)
+            entry.name = "[Root]";
+        else
+        {
+            bool is_manual = false;
+            const char* name = gui_debug_get_symbol_name(function.bank, function.address, &is_manual);
+            if (IsValidPointer(name))
+            {
+                entry.name = name;
+                entry.symbol = is_manual ? "manual" : "auto";
+            }
+        }
+
+        if (!filter_upper.empty())
+        {
+            std::string name_upper = entry.name;
+            std::transform(name_upper.begin(), name_upper.end(), name_upper.begin(), ::toupper);
+
+            char address[8];
+            snprintf(address, sizeof(address), "%04X", function.address);
+
+            bool name_match = (name_upper.find(filter_upper) != std::string::npos);
+            bool address_match = !pseudo && (std::string(address).find(filter_upper) != std::string::npos);
+
+            if (!name_match && !address_match)
+                continue;
+        }
+
+        if (sort == "exclusive")
+            entry.key = function.exclusive_cycles;
+        else if (sort == "calls")
+            entry.key = function.calls;
+        else if (sort == "average")
+            entry.key = (function.completed > 0) ? function.inclusive_cycles / function.completed : 0;
+        else if (sort == "max")
+            entry.key = (function.completed > 0) ? function.max_cycles : 0;
+        else
+            entry.key = function.inclusive_cycles;
+
+        entries.push_back(entry);
+    }
+
+    std::sort(entries.begin(), entries.end(), profiler_entry_compare);
+
+    json functions_array = json::array();
+
+    for (size_t i = 0; (i < entries.size()) && (i < (size_t)count); i++)
+    {
+        const GG_Profiler_Function& function = functions[entries[i].index];
+        bool root = (function.type == PROFILER_FUNCTION_ROOT);
+        json item;
+        char text[16];
+
+        item["name"] = entries[i].name;
+        item["type"] = k_profiler_type_names[function.type];
+
+        if (!root)
+        {
+            item["symbol"] = entries[i].symbol;
+            snprintf(text, sizeof(text), "%02X", function.bank);
+            item["bank"] = text;
+            snprintf(text, sizeof(text), "%04X", function.address);
+            item["address"] = text;
+        }
+
+        if (!root)
+        {
+            item["calls"] = function.calls;
+            item["calls_per_frame"] = (frames > 0.0) ? profiler_round((double)function.calls / frames) : 0.0;
+            item["inclusive_cycles"] = function.inclusive_cycles;
+            item["inclusive_percent"] = (total > 0) ? profiler_round(((double)function.inclusive_cycles * 100.0) / (double)total) : 0.0;
+        }
+
+        item["exclusive_cycles"] = function.exclusive_cycles;
+        item["exclusive_percent"] = (total > 0) ? profiler_round(((double)function.exclusive_cycles * 100.0) / (double)total) : 0.0;
+
+        if (!root && (function.completed > 0))
+        {
+            item["average_cycles"] = function.inclusive_cycles / function.completed;
+            item["min_cycles"] = function.min_cycles;
+            item["max_cycles"] = function.max_cycles;
+        }
+
+        functions_array.push_back(item);
+    }
+
+    result["collecting"] = profiler->IsEnabled();
+    result["window_open"] = config_debug.show_profiler;
+    result["total_cycles"] = total;
+    result["frame_cycles"] = frame_cycles;
+    result["frames"] = profiler_round(frames);
+    result["function_count"] = function_count - 1;
+    result["sort"] = sort;
+    result["count"] = functions_array.size();
+    result["functions"] = functions_array;
+
+    return result;
+}
+
+json DebugAdapter::ListCheats()
+{
+    json result;
+    json cheats = json::array();
+    int count = gui_cheats_get_count();
+
+    for (int i = 0; i < count; i++)
+        cheats.push_back(cheat_to_json(i, gui_cheats_get(i)));
+
+    result["count"] = count;
+    result["max"] = GUI_CHEATS_MAX;
+    result["cheats"] = cheats;
+
+    return result;
+}
+
+json DebugAdapter::AddCheat(const std::string& code, const std::string& description)
+{
+    json result;
+    gui_CheatEntry entry;
+
+    if (!m_core || !m_core->GetMedia()->IsReady())
+    {
+        result["error"] = "No media loaded";
+        return result;
+    }
+
+    if ((code.length() >= sizeof(entry.code)) || !GeargrafxCore::IsValidCheat(code.c_str()))
+    {
+        result["error"] = "Invalid cheat code. Use AAAAAA:VV or AAAAAA?CC:VV, join codes with +";
+        return result;
+    }
+
+    int index = gui_cheats_add(code.c_str(), description.c_str());
+
+    if (index < 0)
+    {
+        result["error"] = "Maximum number of cheats reached";
+        return result;
+    }
+
+    const gui_CheatEntry* added = gui_cheats_get(index);
+    result = cheat_to_json(index, added);
+    result["success"] = true;
+
+    if (!added->active)
+        result["warning"] = "Cheat code does not apply to the loaded game";
+
+    return result;
+}
+
+json DebugAdapter::RemoveCheat(int index)
+{
+    json result;
+
+    if (!gui_cheats_remove(index))
+    {
+        result["error"] = "Invalid cheat index";
+        return result;
+    }
+
+    result["success"] = true;
+    result["count"] = gui_cheats_get_count();
+
     return result;
 }

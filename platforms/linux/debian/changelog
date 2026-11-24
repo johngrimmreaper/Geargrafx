@@ -1,3 +1,12 @@
+geargrafx (1.8.9-1) UNRELEASED; urgency=medium
+
+  * New upstream release 1.8.9.
+  * Install upstream icons at all supported resolutions.
+  * VCE black and white mode and notification duration option.
+  * Upstream bug fixes and improvements.
+
+ -- Reaper <JohnGrimmReaper@disroot.org>  Tue, 24 Nov 2026 02:31:52 +0000
+
 geargrafx (1.7.20-1) UNRELEASED; urgency=medium
 
   * New iOS App (in development)

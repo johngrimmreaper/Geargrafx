@@ -24,11 +24,14 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <string>
+#include <vector>
 #include "libretro.h"
 #include "geargrafx.h"
 #include "media_file.h"
 #include "libretro_core_options.h"
 #include "libretro_vfs_file.h"
+#include "mmi_archive.h"
 
 #ifdef _WIN32
 static const char slash = '\\';
@@ -44,12 +47,14 @@ static const char slash = '/';
 #define MAX_PADS GG_MAX_GAMEPADS
 #define MAX_BUTTONS 14
 
-#define MAX_SCREEN_WIDTH 1120
-#define MAX_SCREEN_HEIGHT 242
+#define MAX_SCREEN_WIDTH 1176
+#define MAX_SCREEN_HEIGHT 263
+
+#define MAX_MEMORY_DESCRIPTORS 8
+#define FFWD_MESSAGE_FRAMES 120
 
 static retro_environment_t environ_cb;
 static retro_video_refresh_t video_cb;
-static retro_audio_sample_t audio_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static retro_input_poll_t input_poll_cb;
 static retro_input_state_t input_state_cb;
@@ -60,6 +65,8 @@ retro_log_printf_t log_cb;
 static char retro_system_directory[4096];
 static char retro_save_directory[4096];
 static char retro_game_path[4096];
+static unsigned initial_mmi_image_index = 0;
+static char initial_mmi_image_path[4096] = {};
 
 static s16 audio_buf[GG_AUDIO_BUFFER_SIZE];
 static int audio_sample_count = 0;
@@ -69,6 +76,8 @@ static int current_screen_height = 0;
 static int current_width_scale = 1;
 static float current_aspect_ratio = 0.0f;
 static float aspect_ratio = 0.0f;
+static float laseractive_aspect_ratio = 4.0f / 3.0f;
+static int laseractive_scanline_mode = 0;
 static double current_fps = 0.0;
 
 static bool allow_up_down = false;
@@ -83,15 +92,23 @@ static bool lowpass_speed_716 = true;
 static bool lowpass_speed_108 = true;
 
 static bool turbo_toggle_hotkey = false;
+static bool ffwd_loads = false;
+static bool ffwd_notification = true;
+static bool ffwd_override_supported = false;
+static bool ffwd_override_active = false;
+static int ffwd_message_frames = FFWD_MESSAGE_FRAMES;
 static int mouse_sensitivity = 5;
 static bool libretro_supports_bitmasks = false;
 static GG_Keys avenue_pad_3_button = GG_KEY_NONE;
 static int joypad_current[MAX_PADS][MAX_BUTTONS];
 static int joypad_old[MAX_PADS][MAX_BUTTONS];
+
 struct MouseState
 {
     int delta_x;
     int delta_y;
+    float remainder_x;
+    float remainder_y;
     int button_i;
     int button_ii;
     int button_select;
@@ -127,8 +144,11 @@ static GeargrafxCore* core;
 static GG_Runtime_Info runtime_info;
 static u8* frame_buffer;
 static const retro_vfs_interface* vfs_interface = NULL;
+static std::vector<std::string> libretro_cheats;
 
 static void load_bios(void);
+static bool load_pac_bios_file(const char* path, GG_LaserActive_Region region);
+static void load_pac_bios(void);
 static void save_mb128(void);
 static void load_mb128(void);
 static void set_controller_info(void);
@@ -139,11 +159,30 @@ static void apply_controller_device(unsigned port, unsigned device, bool log_dev
 static void release_controller_input(unsigned port);
 static void poll_input(void);
 static void apply_input(void);
+static void set_memory_maps(void);
+static void apply_cheats(void);
+static void clear_cheats(void);
 static bool categories_supported = false;
+static bool adpcm_clock_speed_visible = true;
+static bool update_core_options_display(void);
 static void check_variables(void);
+static void update_load_ffwd(bool visible);
+static void set_ffwd_override(bool enabled);
+static bool is_normal_state_load(void);
+static float get_aspect_ratio(void);
 static bool path_has_extension(const char* path, const char* extension);
 static bool path_is_cdrom_uri(const char* path);
 static bool path_is_cd_content(const char* path);
+static bool disk_set_eject_state(bool ejected);
+static bool disk_get_eject_state(void);
+static unsigned disk_get_image_index(void);
+static bool disk_set_image_index(unsigned index);
+static unsigned disk_get_num_images(void);
+static bool disk_replace_image_index(unsigned index, const struct retro_game_info* info);
+static bool disk_add_image_index(void);
+static bool disk_set_initial_image(unsigned index, const char* path);
+static bool disk_get_image_path(unsigned index, char* path, size_t length);
+static bool disk_get_image_label(unsigned index, char* label, size_t length);
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -183,7 +222,7 @@ unsigned retro_api_version(void)
 
 void retro_set_audio_sample(retro_audio_sample_t cb)
 {
-    audio_cb = cb;
+    (void)cb;
 }
 
 void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb)
@@ -210,21 +249,6 @@ void retro_set_environment(retro_environment_t cb)
 {
     environ_cb = cb;
 
-    struct retro_vfs_interface_info vfs_interface_info = { };
-    vfs_interface_info.required_interface_version = 2;
-    vfs_interface_info.iface = NULL;
-
-    if (environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_interface_info) && vfs_interface_info.iface)
-    {
-        vfs_interface = vfs_interface_info.iface;
-        MediaFile::SetVfsInterface(vfs_interface);
-    }
-    else
-    {
-        vfs_interface = NULL;
-        MediaFile::SetVfsInterface(NULL);
-    }
-
     static const struct retro_system_content_info_override content_overrides[] = {
         {
             "pce|sgx|hes",  // extensions
@@ -236,12 +260,64 @@ void retro_set_environment(retro_environment_t cb)
 
     environ_cb(RETRO_ENVIRONMENT_SET_CONTENT_INFO_OVERRIDE, (void*)content_overrides);
 
+    static const struct retro_disk_control_ext_callback disk_control = {
+        disk_set_eject_state,
+        disk_get_eject_state,
+        disk_get_image_index,
+        disk_set_image_index,
+        disk_get_num_images,
+        disk_replace_image_index,
+        disk_add_image_index,
+        disk_set_initial_image,
+        disk_get_image_path,
+        disk_get_image_label
+    };
+
+    if (!environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE, (void*)&disk_control))
+    {
+        static const struct retro_disk_control_callback disk_control_basic = {
+            disk_set_eject_state,
+            disk_get_eject_state,
+            disk_get_image_index,
+            disk_set_image_index,
+            disk_get_num_images,
+            disk_replace_image_index,
+            disk_add_image_index
+        };
+        environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, (void*)&disk_control_basic);
+    }
+
     set_controller_info();
     libretro_set_core_options(environ_cb, &categories_supported);
+
+    adpcm_clock_speed_visible = true;
+    struct retro_core_options_update_display_callback display_callback = { update_core_options_display };
+    environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK, &display_callback);
+    update_core_options_display();
+
+    ffwd_override_supported = environ_cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, NULL);
+
+    if (!ffwd_override_supported)
+    {
+        struct retro_core_option_display display = { "geargrafx_cdrom_fast_forward", false };
+        environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
+        display.key = "geargrafx_cdrom_fast_forward_notification";
+        environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
+    }
 }
 
 void retro_init(void)
 {
+    struct retro_vfs_interface_info vfs_interface_info = { };
+    vfs_interface_info.required_interface_version = 1;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_interface_info) && vfs_interface_info.iface)
+        vfs_interface = vfs_interface_info.iface;
+    else
+        vfs_interface = NULL;
+
+    MediaFile::SetVfsInterface(vfs_interface, vfs_interface_info.required_interface_version);
+
     if (environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
         log_cb = logging.log;
     else
@@ -288,9 +364,17 @@ void retro_deinit(void)
     current_width_scale = 1;
     current_aspect_ratio = 0.0f;
     aspect_ratio = 0.0f;
+    laseractive_aspect_ratio = 4.0f / 3.0f;
+    laseractive_scanline_mode = 0;
+    initial_mmi_image_index = 0;
+    initial_mmi_image_path[0] = 0;
     current_fps = 0.0;
     libretro_supports_bitmasks = false;
     avenue_pad_3_button = GG_KEY_NONE;
+    ffwd_loads = false;
+    ffwd_notification = true;
+    ffwd_override_active = false;
+    ffwd_message_frames = FFWD_MESSAGE_FRAMES;
 
     reset_controller_devices();
     clear_input_state();
@@ -304,6 +388,7 @@ void retro_reset(void)
     if (core->GetMedia()->IsCDROM())
         load_bios();
     core->ResetMedia(true);
+    set_memory_maps();
 }
 
 void retro_set_controller_port_device(unsigned port, unsigned device)
@@ -313,6 +398,13 @@ void retro_set_controller_port_device(unsigned port, unsigned device)
         if (log_cb)
             log_cb(RETRO_LOG_DEBUG, "retro_set_controller_port_device invalid port number: %u\n", port);
         return;
+    }
+
+    if ((port != 0) && (device == RETRO_DEVICE_PCE_MOUSE))
+    {
+        if (log_cb)
+            log_cb(RETRO_LOG_WARN, "Mouse is only supported on port 1. Using a standard PCE pad on port %u.\n", port + 1);
+        device = RETRO_DEVICE_PCE_PAD;
     }
 
     if ((input_device[port] != device) && core)
@@ -329,7 +421,7 @@ void retro_get_system_info(struct retro_system_info *info)
     info->library_name     = GG_TITLE;
     info->library_version  = GG_VERSION;
     info->need_fullpath    = true;
-    info->valid_extensions = "pce|sgx|hes|cue|chd";
+    info->valid_extensions = "pce|sgx|hes|cue|chd|mmi";
 }
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -341,7 +433,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
     info->geometry.base_height  = runtime_info.screen_height;
     info->geometry.max_width    = MAX_SCREEN_WIDTH;
     info->geometry.max_height   = MAX_SCREEN_HEIGHT;
-    info->geometry.aspect_ratio = aspect_ratio == 0.0f ? (float)runtime_info.screen_width / (float)runtime_info.screen_height / (float)runtime_info.width_scale : aspect_ratio;
+    info->geometry.aspect_ratio = get_aspect_ratio();
     info->timing.fps            = current_fps;
     info->timing.sample_rate    = 44100.0;
 }
@@ -355,23 +447,31 @@ void retro_run(void)
     poll_input();
     apply_input();
 
+    bool visible = true;
+    int av_enable = 0;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av_enable))
+        visible = (av_enable & 1) != 0;
+
     audio_sample_count = 0;
     core->RunToVBlank(frame_buffer, audio_buf, &audio_sample_count);
+    update_load_ffwd(visible);
 
     core->GetRuntimeInfo(runtime_info);
 
+    float effective_aspect_ratio = get_aspect_ratio();
     bool fps_changed = runtime_info.fps < current_fps - 0.000001 || runtime_info.fps > current_fps + 0.000001;
     bool geometry_changed = (runtime_info.screen_width != current_screen_width) ||
                             (runtime_info.screen_height != current_screen_height) ||
                             (runtime_info.width_scale != current_width_scale) ||
-                            (aspect_ratio != current_aspect_ratio);
+                            (effective_aspect_ratio != current_aspect_ratio);
 
     if (fps_changed || geometry_changed)
     {
         current_screen_width = runtime_info.screen_width;
         current_screen_height = runtime_info.screen_height;
         current_width_scale = runtime_info.width_scale;
-        current_aspect_ratio = aspect_ratio;
+        current_aspect_ratio = effective_aspect_ratio;
         current_fps = runtime_info.fps;
 
         retro_system_av_info info;
@@ -379,7 +479,7 @@ void retro_run(void)
         info.geometry.base_height  = runtime_info.screen_height;
         info.geometry.max_width    = MAX_SCREEN_WIDTH;
         info.geometry.max_height   = MAX_SCREEN_HEIGHT;
-        info.geometry.aspect_ratio = (aspect_ratio == 0.0f ? ((float)runtime_info.screen_width / (float)runtime_info.width_scale) / (float)runtime_info.screen_height : aspect_ratio);
+        info.geometry.aspect_ratio = effective_aspect_ratio;
         info.timing.fps            = current_fps;
         info.timing.sample_rate    = 44100.0;
 
@@ -445,6 +545,13 @@ bool retro_load_game(const struct retro_game_info *info)
     log_cb(RETRO_LOG_INFO, "retro_load_game: %s\n", retro_game_path);
 
     bool is_cd_content = path_is_cd_content(retro_game_path);
+    bool is_mmi_content = path_has_extension(retro_game_path, "mmi");
+
+    if (is_mmi_content && (sizeof(void*) < 8))
+    {
+        log_cb(RETRO_LOG_ERROR, "MMI requires a 64-bit libretro target.\n");
+        return false;
+    }
 
     if (path_is_cdrom_uri(retro_game_path))
         log_cb(RETRO_LOG_INFO, "Loading CD-ROM through libretro VFS: %s\n", retro_game_path);
@@ -452,18 +559,63 @@ bool retro_load_game(const struct retro_game_info *info)
     if (is_cd_content)
         load_bios();
 
+    if (is_mmi_content)
+        load_pac_bios();
+
     if (is_cd_content)
     {
         log_cb(RETRO_LOG_INFO, "retro_load_game CD-ROM from file.\n");
+
         if (!core->LoadMedia(retro_game_path))
         {
-            log_cb(RETRO_LOG_ERROR, "Invalid or corrupted CD-ROM media.\n");
+            if (info_ext && info_ext->file_in_archive && path_has_extension(retro_game_path, "cue"))
+            {
+                struct retro_message msg = {};
+                msg.msg = "Zipped CD-ROM images are not supported, use CHD instead";
+                msg.frames = 360;
+                environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+                log_cb(RETRO_LOG_ERROR, "%s\n", msg.msg);
+            }
+            else
+                log_cb(RETRO_LOG_ERROR, "Invalid or corrupted CD-ROM media.\n");
+
             return false;
+        }
+
+        if (is_mmi_content && !core->GetMedia()->IsBiosReady())
+        {
+            Media* media = core->GetMedia();
+            const GG_MmiInfo* mmi = core->GetCDROMMedia()->GetMmiInfo();
+
+            if (media->IsLaserActive() && mmi && mmi->card.empty())
+                log_cb(RETRO_LOG_ERROR, "A PAC BIOS for the selected LaserActive region is required.\n");
+            else if (media->IsGameExpress())
+                log_cb(RETRO_LOG_ERROR, "A Game Express BIOS is required by this MMI.\n");
+            else
+                log_cb(RETRO_LOG_ERROR, "A System Card BIOS is required by this MMI.\n");
+
+            core->GetMedia()->Reset();
+
+            return false;
+        }
+
+        if (is_mmi_content && initial_mmi_image_path[0] && strcmp(initial_mmi_image_path, retro_game_path) != 0)
+            initial_mmi_image_index = 0;
+
+        if (is_mmi_content && (initial_mmi_image_index != core->GetCDROMMedia()->GetSelectedMmiMediaIndex()))
+        {
+            if (!core->EjectLaserDisc() || !core->SelectLaserDiscMedia(initial_mmi_image_index) || !core->InsertLaserDisc())
+            {
+                log_cb(RETRO_LOG_ERROR, "Invalid initial MMI media index %u.\n", initial_mmi_image_index);
+                core->GetMedia()->Reset();
+                return false;
+            }
         }
     }
     else
     {
         log_cb(RETRO_LOG_INFO, "retro_load_game HuCard.\n");
+
         if (!load_hucard(info, retro_game_path))
         {
             log_cb(RETRO_LOG_ERROR, "Invalid or corrupted HuCard file.\n");
@@ -478,6 +630,8 @@ bool retro_load_game(const struct retro_game_info *info)
         return false;
     }
 
+    set_memory_maps();
+
     bool achievements = true;
     environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &achievements);
 
@@ -491,6 +645,13 @@ bool retro_load_game(const struct retro_game_info *info)
 void retro_unload_game(void)
 {
     save_mb128();
+    initial_mmi_image_index = 0;
+    initial_mmi_image_path[0] = 0;
+    clear_cheats();
+    set_ffwd_override(false);
+    if (core && core->GetCDROMMedia()->IsMmi())
+        core->GetMedia()->Reset();
+    audio_sample_count = 0;
 }
 
 unsigned retro_get_region(void)
@@ -520,7 +681,16 @@ bool retro_serialize(void *data, size_t size)
 
 bool retro_unserialize(const void *data, size_t size)
 {
-    return core->LoadState(reinterpret_cast<const u8*>(data), size);
+    if (!core->LoadState(reinterpret_cast<const u8*>(data), size))
+        return false;
+
+    if (is_normal_state_load())
+    {
+        core->ResetLoadDetection();
+        set_ffwd_override(false);
+    }
+
+    return true;
 }
 
 void *retro_get_memory_data(unsigned id)
@@ -553,14 +723,90 @@ size_t retro_get_memory_size(unsigned id)
     return 0;
 }
 
+static void add_memory_descriptor(struct retro_memory_descriptor* descriptors, unsigned* count, u8* ptr, size_t start,
+    size_t length, uint64_t flags)
+{
+    size_t offset = 0;
+
+    while ((offset < length) && (*count < MAX_MEMORY_DESCRIPTORS))
+    {
+        size_t address = start + offset;
+        size_t size = 1;
+
+        while (((address & ((size << 1) - 1)) == 0) && ((size << 1) <= length - offset))
+            size <<= 1;
+
+        struct retro_memory_descriptor* descriptor = &descriptors[(*count)++];
+        memset(descriptor, 0, sizeof(*descriptor));
+        descriptor->flags = flags;
+        descriptor->ptr = ptr + offset;
+        descriptor->start = address;
+        descriptor->len = size;
+        offset += size;
+    }
+}
+
+static void set_memory_maps(void)
+{
+    struct retro_memory_descriptor descriptors[MAX_MEMORY_DESCRIPTORS];
+    unsigned count = 0;
+    Memory* memory = core->GetMemory();
+
+    add_memory_descriptor(descriptors, &count, memory->GetWorkingRAM(), 0x1F0000, memory->GetWorkingRAMSize(),
+        RETRO_MEMDESC_SYSTEM_RAM);
+    add_memory_descriptor(descriptors, &count, memory->GetCDROMRAM(), 0x100000, memory->GetCDROMRAMSize(),
+        RETRO_MEMDESC_SYSTEM_RAM);
+    add_memory_descriptor(descriptors, &count, memory->GetCardRAM(), memory->GetCardRAMStart() * 0x2000,
+        memory->GetCardRAMSize(), RETRO_MEMDESC_SYSTEM_RAM);
+    add_memory_descriptor(descriptors, &count, memory->GetBackupRAM(), 0x1EE000, memory->GetBackupRAMSize(),
+        RETRO_MEMDESC_SAVE_RAM);
+
+    struct retro_memory_map memory_map = { descriptors, count };
+    environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &memory_map);
+}
+
+static void apply_cheats(void)
+{
+    if (!core)
+        return;
+
+    core->ClearCheats();
+
+    for (size_t i = 0; i < libretro_cheats.size(); i++)
+    {
+        if (!libretro_cheats[i].empty() && !core->SetCheat(libretro_cheats[i].c_str()))
+            log_cb(RETRO_LOG_WARN, "Invalid cheat code: %s\n", libretro_cheats[i].c_str());
+    }
+}
+
+static void clear_cheats(void)
+{
+    libretro_cheats.clear();
+
+    if (core)
+        core->ClearCheats();
+}
+
 void retro_cheat_reset(void)
 {
-    // TODO [libretro] Implement cheats
+    clear_cheats();
 }
 
 void retro_cheat_set(unsigned index, bool enabled, const char *code)
 {
-    // TODO [libretro] Implement cheats
+    if (enabled)
+    {
+        if (index >= libretro_cheats.size())
+            libretro_cheats.resize(index + 1);
+
+        libretro_cheats[index] = code ? code : "";
+    }
+    else if (index < libretro_cheats.size())
+    {
+        libretro_cheats[index].clear();
+    }
+
+    apply_cheats();
 }
 
 static bool load_bios_file(const char* path, bool syscard)
@@ -641,6 +887,53 @@ static void load_bios(void)
 
     snprintf(bios_path, 4113, "%s%c%s", retro_system_directory, slash, gameexpress);
     load_bios_file(bios_path, false);
+}
+
+static bool load_pac_bios_file(const char* path, GG_LaserActive_Region region)
+{
+    core->UnloadPacBios(region);
+
+    if (!vfs_interface)
+        return core->LoadPacBios(path, region);
+
+    LibretroVfsFile file(vfs_interface);
+    if (!file.Open(path, RETRO_VFS_FILE_ACCESS_READ))
+        return false;
+
+    s64 size = file.GetSize();
+    if ((size <= 0) || (size > (GG_BIOS_LASERACTIVE_SIZE + 512)))
+        return false;
+
+    u8* buffer = new u8[(size_t)size];
+    bool loaded = file.ReadAll(buffer, (u64)size);
+    loaded = file.Close() && loaded;
+    loaded = loaded && core->LoadPacBiosFromBuffer(buffer, (int)size, region);
+    SafeDeleteArray(buffer);
+    return loaded;
+}
+
+static void load_pac_bios(void)
+{
+    char path[4113];
+    GG_LaserActive_Region region = core->GetMedia()->GetLaserActiveRegion();
+
+    if ((region == GG_LASERACTIVE_REGION_AUTO) || (region == GG_LASERACTIVE_REGION_JAPAN))
+    {
+        snprintf(path, sizeof(path), "%s%c%s", retro_system_directory, slash, "pac-n1.bin");
+        bool loaded = load_pac_bios_file(path, GG_LASERACTIVE_REGION_JAPAN);
+
+        if (!loaded)
+        {
+            snprintf(path, sizeof(path), "%s%c%s", retro_system_directory, slash, "pce-lp1.bin");
+            load_pac_bios_file(path, GG_LASERACTIVE_REGION_JAPAN);
+        }
+    }
+
+    if ((region == GG_LASERACTIVE_REGION_AUTO) || (region == GG_LASERACTIVE_REGION_US))
+    {
+        snprintf(path, sizeof(path), "%s%c%s", retro_system_directory, slash, "pac-n10.bin");
+        load_pac_bios_file(path, GG_LASERACTIVE_REGION_US);
+    }
 }
 
 static void save_mb128(void)
@@ -736,10 +1029,10 @@ static void set_controller_info(void)
 
     static const struct retro_controller_info ports[] = {
         { port, 4 },
-        { port, 4 },
-        { port, 4 },
-        { port, 4 },
-        { port, 4 },
+        { port, 3 },
+        { port, 3 },
+        { port, 3 },
+        { port, 3 },
         { NULL, 0 }
     };
 
@@ -770,13 +1063,9 @@ static void set_controller_info(void)
         button_ids(0)
         mouse_ids(0)
         button_ids(1)
-        mouse_ids(1)
         button_ids(2)
-        mouse_ids(2)
         button_ids(3)
-        mouse_ids(3)
         button_ids(4)
-        mouse_ids(4)
         { 0, 0, 0, 0, NULL }
     };
 
@@ -806,6 +1095,8 @@ static void clear_input_state(void)
 
         mouse_current[i].delta_x = 0;
         mouse_current[i].delta_y = 0;
+        mouse_current[i].remainder_x = 0.0f;
+        mouse_current[i].remainder_y = 0.0f;
         mouse_current[i].button_i = 0;
         mouse_current[i].button_ii = 0;
         mouse_current[i].button_select = 0;
@@ -877,6 +1168,8 @@ static void release_controller_input(unsigned port)
 
     mouse_current[port].delta_x = 0;
     mouse_current[port].delta_y = 0;
+    mouse_current[port].remainder_x = 0.0f;
+    mouse_current[port].remainder_y = 0.0f;
     mouse_current[port].button_i = 0;
     mouse_current[port].button_ii = 0;
     mouse_current[port].button_select = 0;
@@ -932,8 +1225,12 @@ static void poll_input(void)
             int mouse_y = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
             int sen = MAX(mouse_sensitivity, 1);
 
-            mouse_current[j].delta_x = (int)((float)mouse_x * ((float)sen / 6.0f));
-            mouse_current[j].delta_y = (int)((float)mouse_y * ((float)sen / 6.0f));
+            mouse_current[j].remainder_x += (float)mouse_x * ((float)sen / 6.0f);
+            mouse_current[j].remainder_y += (float)mouse_y * ((float)sen / 6.0f);
+            mouse_current[j].delta_x = (int)mouse_current[j].remainder_x;
+            mouse_current[j].delta_y = (int)mouse_current[j].remainder_y;
+            mouse_current[j].remainder_x -= (float)mouse_current[j].delta_x;
+            mouse_current[j].remainder_y -= (float)mouse_current[j].delta_y;
             mouse_current[j].button_i = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT) ? 1 : 0;
             mouse_current[j].button_ii = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT) ? 1 : 0;
             mouse_current[j].button_select = input_state_cb(j, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_4) ? 1 : 0;
@@ -1136,6 +1433,79 @@ static void apply_input(void)
     }
 }
 
+static bool update_core_options_display(void)
+{
+    struct retro_variable var = { "geargrafx_adpcm_clock_mode", NULL };
+    bool visible = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value &&
+        (strcmp(var.value, "Manual") == 0);
+
+    if (visible == adpcm_clock_speed_visible)
+        return false;
+
+    struct retro_core_option_display display = { "geargrafx_adpcm_clock_speed", visible };
+    if (!environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display))
+        return false;
+
+    adpcm_clock_speed_visible = visible;
+    return true;
+}
+
+static void update_load_ffwd(bool visible)
+{
+    if (!ffwd_loads || !visible)
+        return;
+
+    bool loading = core->UpdateLoadDetection();
+
+    if (!ffwd_override_active && (ffwd_message_frames < FFWD_MESSAGE_FRAMES))
+        ffwd_message_frames++;
+
+    if (loading == ffwd_override_active)
+        return;
+
+    bool fastforwarding = false;
+
+    if (loading && environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &fastforwarding) && fastforwarding)
+        return;
+
+    set_ffwd_override(loading);
+
+    if (loading && ffwd_notification && (ffwd_message_frames >= FFWD_MESSAGE_FRAMES))
+    {
+        struct retro_message msg = {};
+        msg.msg = "Fast forwarding CD-ROM load";
+        msg.frames = 120;
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    }
+
+    ffwd_message_frames = 0;
+}
+
+static void set_ffwd_override(bool enabled)
+{
+    if (enabled == ffwd_override_active)
+        return;
+
+    struct retro_fastforwarding_override ffwd = { 0.0f, enabled, false, false };
+    environ_cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &ffwd);
+    ffwd_override_active = enabled;
+}
+
+static bool is_normal_state_load(void)
+{
+    enum retro_savestate_context context = RETRO_SAVESTATE_CONTEXT_UNKNOWN;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context))
+        return context == RETRO_SAVESTATE_CONTEXT_NORMAL;
+
+    int av_enable = 0;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av_enable))
+        return (av_enable & RETRO_AV_ENABLE_FAST_SAVESTATES) == 0;
+
+    return true;
+}
+
 static void check_variables(void)
 {
     struct retro_variable var = { };
@@ -1193,6 +1563,8 @@ static void check_variables(void)
             aspect_ratio = 16.0f / 9.0f;
         else if (strcmp(var.value, "16:10 DAR") == 0)
             aspect_ratio = 16.0f / 10.0f;
+        else if (strcmp(var.value, "Dot Clock PAR") == 0)
+            aspect_ratio = -1.0f;
         else
             aspect_ratio = 0.0f;
     }
@@ -1201,7 +1573,12 @@ static void check_variables(void)
     var.value = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
     {
-        core->GetHuC6260()->SetOverscan(strcmp(var.value, "Enabled") == 0);
+        int overscan = 0;
+        if (strcmp(var.value, "Enabled") == 0)
+            overscan = 1;
+        else if (strcmp(var.value, "Auto") == 0)
+            overscan = 2;
+        core->GetHuC6260()->SetOverscan(overscan);
     }
 
     int scanline_start = 0;
@@ -1269,6 +1646,14 @@ static void check_variables(void)
             core->GetHuC6260()->SetPalette(strcmp(var.value, "Enabled") == 0 ?
                 HuC6260::HuC6260_PALETTE_KITRINX : HuC6260::HuC6260_PALETTE_STANDARD_RGB);
         }
+    }
+
+    var.key = "geargrafx_black_and_white";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        core->GetHuC6260()->SetBlackAndWhiteEnabled(strcmp(var.value, "Disabled") != 0);
     }
 
     var.key = "geargrafx_lowpass_filter";
@@ -1348,12 +1733,14 @@ static void check_variables(void)
             core->GetMemory()->SetResetValues(0, 0, 0, 0);
             core->GetHuC6260()->SetResetValue(0);
             core->GetHuC6280()->SetResetValue(0);
+            core->GetScsiController()->SetResetValue(0);
         }
         else
         {
             core->GetMemory()->SetResetValues(-1, 0, 0, 0);
             core->GetHuC6260()->SetResetValue(-1);
             core->GetHuC6280()->SetResetValue(-1);
+            core->GetScsiController()->SetResetValue(-1);
         }
     }
 
@@ -1399,6 +1786,14 @@ static void check_variables(void)
         core->GetMedia()->SetCDROMType(cdrom_type);
     }
 
+    var.key = "geargrafx_cdrom_speed";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        core->GetScsiController()->SetReadSpeed(atoi(var.value));
+    }
+
     var.key = "geargrafx_cdrom_bios";
     var.value = NULL;
 
@@ -1434,14 +1829,162 @@ static void check_variables(void)
         core->GetMedia()->PreloadCdRom(preload_cdrom);
     }
 
+    var.key = "geargrafx_cdrom_fast_forward";
+    var.value = NULL;
+
+    bool loads = false;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        loads = ffwd_override_supported && (strcmp(var.value, "Enabled") == 0);
+    }
+
+    if (loads != ffwd_loads)
+    {
+        ffwd_loads = loads;
+        ffwd_message_frames = FFWD_MESSAGE_FRAMES;
+        core->ResetLoadDetection();
+        set_ffwd_override(false);
+    }
+
+    var.key = "geargrafx_cdrom_fast_forward_notification";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        ffwd_notification = (strcmp(var.value, "Enabled") == 0);
+    }
+
+    var.key = "geargrafx_laseractive_region";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        GG_LaserActive_Region region = GG_LASERACTIVE_REGION_AUTO;
+        if (strcmp(var.value, "Japan") == 0)
+            region = GG_LASERACTIVE_REGION_JAPAN;
+        else if (strcmp(var.value, "US") == 0)
+            region = GG_LASERACTIVE_REGION_US;
+        core->SetLaserActiveRegion(region);
+    }
+
+    var.key = "geargrafx_laseractive_aspect_ratio";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        laseractive_aspect_ratio = 4.0f / 3.0f;
+        if (strcmp(var.value, "1:1 PAR") == 0)
+            laseractive_aspect_ratio = 0.0f;
+        else if (strcmp(var.value, "16:9 DAR") == 0)
+            laseractive_aspect_ratio = 16.0f / 9.0f;
+        else if (strcmp(var.value, "16:10 DAR") == 0)
+            laseractive_aspect_ratio = 16.0f / 10.0f;
+    }
+
+    var.key = "geargrafx_laseractive_framing";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        laseractive_scanline_mode = 0;
+        if (strcmp(var.value, "Full Field") == 0)
+            laseractive_scanline_mode = 1;
+        else if (strcmp(var.value, "Manual") == 0)
+            laseractive_scanline_mode = 2;
+    }
+
+    int laseractive_start = HUC6260_LASERACTIVE_SCANLINE_START;
+    int laseractive_end = HUC6260_LASERACTIVE_SCANLINE_END;
+
+    if (laseractive_scanline_mode == 1)
+    {
+        laseractive_start = 0;
+        laseractive_end = HUC6260_LINES - 1;
+    }
+    else if (laseractive_scanline_mode == 2)
+    {
+        var.key = "geargrafx_laseractive_scanline_start";
+        var.value = NULL;
+
+        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+            laseractive_start = atoi(var.value);
+
+        var.key = "geargrafx_laseractive_scanline_end";
+        var.value = NULL;
+
+        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+            laseractive_end = atoi(var.value);
+    }
+
+    core->GetHuC6260()->SetLaserActiveScanlines(laseractive_start, laseractive_end);
+
+    int laseractive_pixel_start = HUC6260_LASERACTIVE_PIXEL_START;
+    int laseractive_pixel_end = HUC6260_LASERACTIVE_PIXEL_END;
+    var.key = "geargrafx_laseractive_horizontal_framing";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        if (strcmp(var.value, "Full Width") == 0)
+        {
+            laseractive_pixel_start = 0;
+            laseractive_pixel_end = HUC6260_LASERACTIVE_PIXEL_WIDTH - 1;
+        }
+        else if (strcmp(var.value, "Manual") == 0)
+        {
+            var.key = "geargrafx_laseractive_pixel_start";
+            var.value = NULL;
+
+            if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+                laseractive_pixel_start = atoi(var.value);
+
+            var.key = "geargrafx_laseractive_pixel_end";
+            var.value = NULL;
+
+            if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+                laseractive_pixel_end = atoi(var.value);
+        }
+    }
+
+    core->GetHuC6260()->SetLaserActivePixels(laseractive_pixel_start, laseractive_pixel_end);
+
     var.key = "geargrafx_psg_huc6280a";
     var.value = NULL;
 
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
     {
-        bool huc6280a = (strcmp(var.value, "Enabled") == 0);
-        core->GetAudio()->GetPSG()->EnableHuC6280A(huc6280a);
+        GG_PSG_Revision revision = GG_PSG_REVISION_AUTO;
+
+        if ((strcmp(var.value, "HuC6280") == 0) || (strcmp(var.value, "Disabled") == 0))
+            revision = GG_PSG_REVISION_HUC6280;
+        else if ((strcmp(var.value, "HuC6280A") == 0) || (strcmp(var.value, "Enabled") == 0))
+            revision = GG_PSG_REVISION_HUC6280A;
+
+        core->SetPSGRevision(revision);
     }
+
+    var.key = "geargrafx_adpcm_clock_mode";
+    var.value = NULL;
+    bool manual_adpcm_clock = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value &&
+        (strcmp(var.value, "Manual") == 0);
+
+    float adpcm_clock_speed = 0.0f;
+    if (manual_adpcm_clock)
+    {
+        adpcm_clock_speed = GG_ADPCM_DEFAULT_CLOCK_SPEED;
+        var.key = "geargrafx_adpcm_clock_speed";
+        var.value = NULL;
+
+        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        {
+            int clock_speed = atoi(var.value);
+            if (clock_speed >= 32000 && clock_speed <= 32200)
+                adpcm_clock_speed = (float)clock_speed;
+        }
+    }
+    core->SetADPCMClockSpeed(adpcm_clock_speed);
+    update_core_options_display();
 
     var.key = "geargrafx_no_sprite_limit";
     var.value = NULL;
@@ -1459,6 +2002,14 @@ static void check_variables(void)
     {
         core->GetHuC6270_1()->SetSafeDefaults(strcmp(var.value, "Enabled") == 0);
         core->GetHuC6270_2()->SetSafeDefaults(strcmp(var.value, "Enabled") == 0);
+    }
+
+    var.key = "geargrafx_cpu_overclock";
+    var.value = NULL;
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        core->GetHuC6280()->SetOverclock(atoi(var.value));
     }
 
     var.key = "geargrafx_avenue_pad_3_switch";
@@ -1588,6 +2139,21 @@ static void check_variables(void)
     }
 }
 
+static float get_aspect_ratio(void)
+{
+    float ratio = runtime_info.aspect_ratio > 0.0f ? laseractive_aspect_ratio : aspect_ratio;
+
+    if (ratio > 0.0f)
+        return ratio;
+
+    float width = (float)runtime_info.screen_width / (float)runtime_info.width_scale;
+
+    if (ratio < 0.0f)
+        width *= runtime_info.pixel_aspect_ratio;
+
+    return width / (float)runtime_info.screen_height;
+}
+
 static bool path_has_extension(const char* path, const char* extension)
 {
     if (!path || !extension)
@@ -1618,5 +2184,94 @@ static bool path_is_cdrom_uri(const char* path)
 
 static bool path_is_cd_content(const char* path)
 {
-    return path_is_cdrom_uri(path) || path_has_extension(path, "cue") || path_has_extension(path, "chd");
+    return path_is_cdrom_uri(path) || path_has_extension(path, "cue") || path_has_extension(path, "chd") || path_has_extension(path, "mmi");
+}
+
+static bool disk_set_eject_state(bool ejected)
+{
+    if (!core || !core->GetCDROMMedia()->IsMmi())
+        return false;
+
+    if (ejected == core->GetCDROMMedia()->IsMmiEjected())
+        return true;
+
+    return ejected ? core->EjectLaserDisc() : core->InsertLaserDisc();
+}
+
+static bool disk_get_eject_state(void)
+{
+    return core && core->GetCDROMMedia()->IsMmiEjected();
+}
+
+static unsigned disk_get_image_index(void)
+{
+    return core && core->GetCDROMMedia()->IsMmi() ? core->GetCDROMMedia()->GetSelectedMmiMediaIndex() : 0;
+}
+
+static bool disk_set_image_index(unsigned index)
+{
+    return core && core->GetCDROMMedia()->IsMmiEjected() && core->SelectLaserDiscMedia(index);
+}
+
+static unsigned disk_get_num_images(void)
+{
+    if (!core)
+        return 0;
+
+    const GG_MmiInfo* info = core->GetCDROMMedia()->GetMmiInfo();
+    return info ? (unsigned)info->media.size() : 0;
+}
+
+static bool disk_replace_image_index(unsigned index, const struct retro_game_info* info)
+{
+    UNUSED(index);
+    UNUSED(info);
+    return false;
+}
+
+static bool disk_add_image_index(void)
+{
+    return false;
+}
+
+static bool disk_set_initial_image(unsigned index, const char* path)
+{
+    if (path && strlen(path) >= sizeof(initial_mmi_image_path))
+        return false;
+
+    initial_mmi_image_index = index;
+    strncpy_fit(initial_mmi_image_path, path ? path : "", sizeof(initial_mmi_image_path));
+
+    return true;
+}
+
+static bool disk_get_image_path(unsigned index, char* path, size_t length)
+{
+    if (!core || !path || (length == 0))
+        return false;
+
+    const GG_MmiInfo* info = core->GetCDROMMedia()->GetMmiInfo();
+    size_t count = info ? info->media.size() : 1;
+
+    if ((index >= count) || strlen(retro_game_path) >= length)
+        return false;
+
+    strncpy_fit(path, retro_game_path, length);
+
+    return true;
+}
+
+static bool disk_get_image_label(unsigned index, char* label, size_t length)
+{
+    if (!core || !label || (length == 0))
+        return false;
+    
+    const GG_MmiInfo* info = core->GetCDROMMedia()->GetMmiInfo();
+
+    if (!info || (index >= info->media.size()) || info->media[index].name.length() >= length)
+        return false;
+
+    strncpy_fit(label, info->media[index].name.c_str(), length);
+
+    return true;
 }

@@ -36,6 +36,7 @@ class Mapper;
 class SF2Mapper;
 class ArcadeCardMapper;
 class TraceLogger;
+class LaserActive;
 
 class Memory
 {
@@ -53,7 +54,7 @@ public:
     };
 
 public:
-    Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom, Random* random);
+    Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom, Random* random, LaserActive* laseractive);
     ~Memory();
     void Init();
     void Reset();
@@ -65,13 +66,16 @@ public:
     bool TryPoke(u16 address, u8 value);
     bool TryPoke(u16 address, u8 bank, u8 value);
     void Write(u16 address, u8 value, bool block_transfer = false);
+    bool CanAddRamCheats(int count);
+    void AddRamCheat(const GG_Cheat& cheat);
+    void ClearRamCheats();
+    void ApplyRamCheats();
     void SetMpr(u8 index, u8 value);
     u8 GetMpr(u8 index);
     void SetMprTAM(u8 bits, u8 value);
     u8 GetMprTMA(u8 bits);
     void SetTraceLogger(TraceLogger* trace_logger);
     u32 GetPhysicalAddress(u16 address);
-    bool GetROMPhysicalAddress(u16 cpu_address, u32& address);
     bool GetROMPhysicalAddress(u8 bank, u16 offset, u32& address);
     u8 GetBank(u16 address);
     void SetResetValues(int mpr, int wram, int card_ram, int arcade_card);
@@ -88,7 +92,6 @@ public:
     int GetROMSize();
     int GetCardRAMSize();
     int GetCardRAMStart();
-    int GetCardRAMEnd();
     int GetBackupRAMSize();
     int GetCDROMRAMSize();
     int GetArcadeCardRAMSize();
@@ -100,17 +103,19 @@ public:
     bool IsBackupRamEnabled();
     bool IsBackupRamUsed();
     void UpdateBackupRam(bool enable);
+    void UpdateLaserActiveSram();
     MemoryBankType GetBankType(u8 bank);
     void SaveRam(std::ostream &file);
     bool LoadRam(std::istream &file, s32 file_size);
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version, size_t end);
 
 private:
     void ReloadMemoryMap();
     void TraceMprEvent(u8 bits, u8 index, u8 new_value);
     void LogMprEvent(u8 bits, u8 index, u8 new_value);
 #if !defined(GG_DISABLE_DISASSEMBLER)
+    void CheckMemoryHooks(u16 address, u8 bank, u16 offset, bool read);
     void CheckPhysicalMemoryBreakpoints(u8 bank, u32 offset, bool read);
 #endif
 
@@ -126,6 +131,7 @@ private:
     CdRom* m_cdrom;
     Random* m_random;
     TraceLogger* m_trace_logger;
+    LaserActive* m_laseractive;
     u8 m_mpr[8];
     u8* m_memory_map[0x100] = {};
     bool m_memory_map_write[0x100] = {};
@@ -148,6 +154,8 @@ private:
     int m_wram_reset_value;
     int m_card_ram_reset_value;
     int m_arcade_card_reset_value;
+    GG_Cheat m_ram_cheats[GG_MAX_CHEATS];
+    int m_ram_cheat_count;
 };
 
 static const u8 k_backup_ram_init_string[8] = { 'H', 'U', 'B', 'M', 0x00, 0xA0, 0x10, 0x80 };

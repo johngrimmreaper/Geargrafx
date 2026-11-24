@@ -212,7 +212,7 @@ bool CdRomPhysicalImage::PreloadDisc()
     return true;
 }
 
-bool CdRomPhysicalImage::PreloadTrack(u32 track_number)
+bool CdRomPhysicalImage::PreloadTrack(u32 track_number, u32 lba)
 {
     if (!m_ready || m_disc_error.load())
         return false;
@@ -227,8 +227,8 @@ bool CdRomPhysicalImage::PreloadTrack(u32 track_number)
     u32 preload_blocks = (track.type == GG_CDROM_AUDIO_TRACK) ? CDROM_PHYSICAL_AUDIO_PRELOAD_BLOCKS : CDROM_PHYSICAL_PREFETCH_BLOCKS;
 
     ResetQueue();
-    QueueReadAhead(track.start_lba, (s32)track_number, preload_blocks);
-    Debug("Physical CD-ROM queueing preload for track %u at LBA %u (%u blocks)", track_number, track.start_lba, preload_blocks);
+    QueueReadAhead(lba, (s32)track_number, preload_blocks);
+    Debug("Physical CD-ROM queueing preload for track %u at LBA %u (%u blocks)", track_number, lba, preload_blocks);
     return true;
 }
 
@@ -994,11 +994,6 @@ u32 CdRomPhysicalImage::CacheIndex(u32 block_lba) const
     // Fold high bits into the cache index to reduce repeated sequential collisions.
     block ^= block >> CDROM_PHYSICAL_CACHE_BITS;
     return block & (CDROM_PHYSICAL_CACHE_BLOCKS - 1);
-}
-
-u32 CdRomPhysicalImage::BlockStartLBA(u32 lba) const
-{
-    return lba & ~(CDROM_PHYSICAL_SECTORS_PER_BLOCK - 1);
 }
 
 u32 CdRomPhysicalImage::BlockStartLBAForTrack(u32 lba, const Track& track) const

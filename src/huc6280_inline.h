@@ -27,6 +27,7 @@
 #include "huc6270.h"
 #include "memory.h"
 #include "trace_logger.h"
+#include "profiler.h"
 
 INLINE void HuC6280::TraceCpuEvent()
 {
@@ -72,7 +73,13 @@ INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
 
     TraceCpuEvent();
 
-    u8 opcode = Fetch8();
+    u8 opcode;
+
+    if (likely(m_transfer_state == 0))
+        opcode = Fetch8();
+    else
+        opcode = m_transfer_opcode;
+
     m_cycles += k_huc6280_opcode_cycles[opcode];
 
     CheckIRQs();
@@ -126,7 +133,7 @@ inline void HuC6280::HandleIRQ()
 #if !defined(GG_DISABLE_DISASSEMBLER)
     m_debug_next_irq =((0xFFFA - vector) >> 1) + 3;
     u16 dest = m_PC.GetValue();
-    PushCallStack(pc, dest, pc, m_memory->GetBank(dest));
+    PushCallStack(pc, dest, pc, m_memory->GetBank(dest), true);
 #endif
 }
 
@@ -165,6 +172,17 @@ INLINE void HuC6280::SetHardwareClock(GG_Clock_Hardware_Fn clock_fn, void* conte
     m_clock_hardware_context = context;
 }
 
+INLINE u32 HuC6280::OverclockCycles(u32 master_cycles)
+{
+    if (likely(m_overclock_ratio == 0))
+        return master_cycles;
+
+    m_overclock_fraction += master_cycles * m_overclock_ratio;
+    u32 cycles = m_overclock_fraction >> 16;
+    m_overclock_fraction &= 0xFFFF;
+    return cycles;
+}
+
 INLINE u32 HuC6280::GetClockedMasterCycles() const
 {
     return m_clocked_master_cycles;
@@ -177,7 +195,7 @@ INLINE void HuC6280::ClockHardwareCycles(u32 master_cycles)
 
     assert(IsValidPointer(m_clock_hardware_fn));
 
-    m_clock_hardware_fn(m_clock_hardware_context, master_cycles);
+    m_clock_hardware_fn(m_clock_hardware_context, OverclockCycles(master_cycles));
     m_clocked_master_cycles += master_cycles;
 
     CheckIRQs();
@@ -186,6 +204,14 @@ INLINE void HuC6280::ClockHardwareCycles(u32 master_cycles)
 INLINE void HuC6280::ClockCountedCycles(unsigned int cycles)
 {
     ClockHardwareCycles(cycles * k_huc6280_speed_divisor[m_speed]);
+}
+
+INLINE void HuC6280::ClockPendingCycles()
+{
+    u32 target = (m_cycles * k_huc6280_speed_divisor[m_speed]) + m_extra_master_cycles;
+
+    if (target > m_clocked_master_cycles)
+        ClockHardwareCycles(target - m_clocked_master_cycles);
 }
 
 INLINE void HuC6280::StallFastCycle()
@@ -278,11 +304,9 @@ INLINE void HuC6280::WriteTimerRegister(u16 address, u8 value)
         if (m_timer_enabled != enabled)
         {
             m_timer_enabled = enabled;
+            m_timer_cycles = k_huc6280_timer_divisor;
             if (enabled)
-            {
                 m_timer_counter = m_timer_reload;
-                m_timer_cycles = k_huc6280_timer_divisor;
-            }
         }
         TraceTimerEvent(TRACE_TIMER_CONTROL_WRITE, value);
     }
@@ -314,11 +338,6 @@ INLINE u16 HuC6280::Address16(u8 high, u8 low)
     return static_cast<u16>(high << 8 ) | low;
 }
 
-INLINE bool HuC6280::PageCrossed(u16 old_address, u16 new_address)
-{
-    return (old_address ^ new_address) > 0x00FF;
-}
-
 INLINE u16 HuC6280::ZeroPageX()
 {
     return ZERO_PAGE_ADDR | m_X.GetValue();
@@ -333,11 +352,6 @@ INLINE void HuC6280::SetOrClearZNFlags(u8 result)
 INLINE void HuC6280::SetZNFlags(u8 result)
 {
     m_P.SetValue(m_P.GetValue() | m_zn_flags_lut[result]);
-}
-
-INLINE void HuC6280::SetOverflowFlag(u8 result)
-{
-    m_P.SetValue((m_P.GetValue() & 0xBF) | (result & 0x40));
 }
 
 INLINE void HuC6280::SetFlag(u8 flag)
@@ -411,13 +425,6 @@ INLINE u16 HuC6280::ZeroPageAddressing()
 INLINE u16 HuC6280::ZeroPageAddressing(EightBitRegister* reg)
 {
     return ZERO_PAGE_ADDR | ((Fetch8() + reg->GetValue()) & 0xFF);
-}
-
-INLINE u16 HuC6280::ZeroPageRelativeAddressing()
-{
-    u16 address = ZeroPageAddressing();
-    s8 offset = static_cast<s8>(Fetch8());
-    return address + offset;
 }
 
 INLINE u16 HuC6280::ZeroPageIndirectAddressing()
@@ -538,12 +545,36 @@ INLINE bool HuC6280::HasPhysicalExecuteBreakpoints() const
     return m_breakpoints_enabled && m_physical_breakpoint_cache[HuC6280_BREAKPOINT_ACCESS_EXECUTE];
 }
 
+INLINE bool HuC6280::HasMemoryHooks(bool read) const
+{
+    return m_memory_hook_cache[read ? HuC6280_BREAKPOINT_ACCESS_READ : HuC6280_BREAKPOINT_ACCESS_WRITE];
+}
+
+INLINE void HuC6280::CheckCpuAddressHooks(u16 address, bool read)
+{
+    if (m_vblank_watch[read ? HuC6280_BREAKPOINT_ACCESS_READ : HuC6280_BREAKPOINT_ACCESS_WRITE] &&
+        (address == m_vblank_watch_address))
+        m_vblank_watch_hit = true;
+
+    GG_CHECK_MEMORY_BREAKPOINT(this, HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, read);
+}
+
+INLINE u16 HuC6280::GetVBlankWatchAddress() const
+{
+    return m_vblank_watch_address;
+}
+
+INLINE bool HuC6280::GetVBlankWatchAccess(bool read) const
+{
+    return m_vblank_watch[read ? HuC6280_BREAKPOINT_ACCESS_READ : HuC6280_BREAKPOINT_ACCESS_WRITE];
+}
+
 INLINE std::stack<HuC6280::GG_CallStackEntry>* HuC6280::GetDisassemblerCallStack()
 {
     return &m_disassembler_call_stack;
 }
 
-INLINE void HuC6280::PushCallStack(u16 src, u16 dest, u16 back, u8 bank)
+INLINE void HuC6280::PushCallStack(u16 src, u16 dest, u16 back, u8 bank, bool irq)
 {
 #if !defined(GG_DISABLE_DISASSEMBLER)
     GG_CallStackEntry entry;
@@ -553,20 +584,35 @@ INLINE void HuC6280::PushCallStack(u16 src, u16 dest, u16 back, u8 bank)
     entry.bank = bank;
     if (m_disassembler_call_stack.size() < 256)
         m_disassembler_call_stack.push(entry);
+
+    if (unlikely(m_profiler->IsEnabled()))
+        ProfilerEnter(dest, irq);
 #else
     UNUSED(src);
     UNUSED(dest);
     UNUSED(back);
     UNUSED(bank);
+    UNUSED(irq);
 #endif
 }
 
-INLINE void HuC6280::PopCallStack()
+INLINE void HuC6280::PopCallStack(u8 stack_bytes)
 {
 #if !defined(GG_DISABLE_DISASSEMBLER)
     if (!m_disassembler_call_stack.empty())
         m_disassembler_call_stack.pop();
+
+    if (unlikely(m_profiler->IsEnabled()))
+        m_profiler->Return((u8)(m_S.GetValue() - stack_bytes), GetPendingMasterCycles());
+#else
+    UNUSED(stack_bytes);
 #endif
+}
+
+INLINE u32 HuC6280::GetPendingMasterCycles()
+{
+    u32 target = (m_cycles * k_huc6280_speed_divisor[m_speed]) + m_extra_master_cycles;
+    return (target > m_clocked_master_cycles) ? target - m_clocked_master_cycles : 0;
 }
 
 INLINE void HuC6280::CheckBreakpoints()
@@ -848,7 +894,6 @@ INLINE void HuC6280::SetDisassemblerOperand(GG_Disassembler_Record* record, u16 
 INLINE void HuC6280::PopulateUnavailableDisassemblerRecord(GG_Disassembler_Record* record, u16 address)
 {
 #if !defined(GG_DISABLE_DISASSEMBLER)
-    record->address = m_memory->GetPhysicalAddress(address);
     record->bank = m_memory->GetBank(address);
     strncpy_fit(record->name, "????", sizeof(record->name));
     strncpy_fit(record->bytes, "?? ", sizeof(record->bytes));
@@ -895,7 +940,6 @@ INLINE void HuC6280::PopulateDisassemblerRecord(GG_Disassembler_Record* record, 
 #if !defined(GG_DISABLE_DISASSEMBLER)
     u8 opcode_size = k_huc6280_opcode_sizes[opcode];
 
-    record->address = m_memory->GetPhysicalAddress(address);
     record->bank = m_memory->GetBank(address);
     record->name[0] = 0;
     record->bytes[0] = 0;

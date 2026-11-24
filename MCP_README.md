@@ -2,9 +2,11 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server for the Geargrafx emulator, enabling AI-assisted debugging and development of TurboGrafx-16 / PC Engine / SuperGrafx games.
 
-This server provides tools for game development, rom hacking, reverse engineering, and debugging through standardized MCP protocols compatible with AI agents like GitHub Copilot, Claude, Codex and others.
+This server provides tools for game development, rom hacking, reverse engineering, and debugging through standardized MCP protocols compatible with AI agents like Claude Code, Codex and others.
 
 ## Downloads
+
+These MCP Bundles (`.mcpb`) package Geargrafx with its MCP server configuration for MCP clients that install bundles, and are the packages published to the [MCP Registry](https://registry.modelcontextprotocol.io/). Claude Code and Codex use a regular Geargrafx build instead, see [Quick Start](#quick-start).
 
 <table>
   <thead>
@@ -18,29 +20,29 @@ This server provides tools for game development, rom hacking, reverse engineerin
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-windows-x64.mcpb">Geargrafx-1.7.20-mcpb-windows-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-windows-x64.mcpb">Geargrafx-1.8.9-mcpb-windows-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-windows-arm64.mcpb">Geargrafx-1.7.20-mcpb-windows-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-windows-arm64.mcpb">Geargrafx-1.8.9-mcpb-windows-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>macOS</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-macos-x64.mcpb">Geargrafx-1.7.20-mcpb-macos-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-macos-x64.mcpb">Geargrafx-1.8.9-mcpb-macos-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-macos-arm64.mcpb">Geargrafx-1.7.20-mcpb-macos-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-macos-arm64.mcpb">Geargrafx-1.8.9-mcpb-macos-arm64.mcpb</a></td>
     </tr>
     <tr>
       <td rowspan="2"><strong>Linux</strong></td>
       <td>x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-linux-x64.mcpb">Geargrafx-1.7.20-mcpb-linux-x64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-linux-x64.mcpb">Geargrafx-1.8.9-mcpb-linux-x64.mcpb</a></td>
     </tr>
     <tr>
       <td>ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-mcpb-linux-arm64.mcpb">Geargrafx-1.7.20-mcpb-linux-arm64.mcpb</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-mcpb-linux-arm64.mcpb">Geargrafx-1.8.9-mcpb-linux-arm64.mcpb</a></td>
     </tr>
   </tbody>
 </table>
@@ -57,7 +59,9 @@ This server provides tools for game development, rom hacking, reverse engineerin
 - **Bookmarks**: Memory and disassembler bookmarks for navigation
 - **Call Stack**: View function call hierarchy
 - **Trace Logger**: CPU instruction trace with interleaved hardware events (VDC, VCE, PSG, timer, CD-ROM, SCSI, ADPCM, input)
+- **Profiler**: Per-function call counts, calls per frame, and inclusive/exclusive cycle statistics
 - **Screenshot Capture**: Get current frame as PNG image
+- **Video Recording**: Record emulated video and audio to AVI files on disk
 - **Rewind**: Time-travel debugging with snapshot status and seek tools
 - **Documentation Resources**: Built-in hardware and programming documentation for AI context
 - **GUI Integration**: MCP server runs alongside the emulator GUI, sharing the same state
@@ -77,6 +81,14 @@ The HTTP transport mode runs the emulator with an embedded web server on `127.0.
 ### Headless Mode
 
 Add `--headless` to run without a GUI window. This is useful for servers, CLI agents, or any machine without a display. All MCP tools work identically in headless mode. Requires `--mcp-stdio` or `--mcp-http`.
+
+A save state can be loaded at launch too, with `--load-state 1` for slot 1 or `--load-state FILE` for a state file; run `geargrafx --help` for the full list.
+
+Headless mode is debug mode without rendering, so the debug output settings apply: screenshots use the output overscan and scanline count from the **Debug** menu instead of the ones in the **Video** menu. By default, overscan is disabled and all 242 scanlines are shown. Headless instances read these settings from the configuration file, so set them in the GUI with debug enabled. The same settings apply when the MCP server runs alongside the GUI, because MCP always runs in debug mode.
+
+### Pause When Inactive
+
+While the MCP server is running, the emulator keeps running when its window loses focus, even with **Pause When Inactive** enabled in the **Emulator** menu. The setting keeps its value and applies again once the server stops.
 
 ### Concurrent Clients
 
@@ -119,17 +131,25 @@ Without `--mcp-router`, call every MCP tool directly.
 
 ## Quick Start
 
-### STDIO Mode with VS Code
+Get a desktop build of Geargrafx from the [downloads](README.md#downloads) or [build it from source](README.md#build-instructions). In the examples below, replace `/path/to/geargrafx` with the full path to the executable:
 
-1. **Install [GitHub Copilot extension](https://code.visualstudio.com/docs/copilot/overview)** in VS Code
+- **macOS:** `/Applications/Geargrafx.app/Contents/MacOS/geargrafx`
+- **Linux:** `/path/to/geargrafx`
+- **Windows:** `C:/path/to/geargrafx.exe`
 
-2. **Configure VS Code settings**:
+### STDIO Mode with Claude Code
 
-   Add to your workspace folder a file named `.vscode/mcp.json` with:
+1. **Add the Geargrafx MCP server** using the CLI:
+
+   ```bash
+   claude mcp add --transport stdio --scope user geargrafx -- /path/to/geargrafx --mcp-stdio
+   ```
+
+   Everything after `--` is passed to Geargrafx untouched. `--scope user` makes the server available in all your projects. Use `--scope local` (the default) to add it only to the current project, or `--scope project` to share it through a `.mcp.json` file in the project root:
 
    ```json
    {
-     "servers": {
+     "mcpServers": {
        "geargrafx": {
          "command": "/path/to/geargrafx",
          "args": ["--mcp-stdio"]
@@ -138,79 +158,43 @@ Without `--mcp-router`, call every MCP tool directly.
    }
    ```
 
-   **Important:** Update the `command` path to match your build location:
-   - **macOS:** `/path/to/geargrafx`
-   - **Linux:** `/path/to/geargrafx`
-   - **Windows:** `C:/path/to/geargrafx.exe`
-
-3. **Restart VS Code** may be necessary for settings to take effect
-
-4. **Open GitHub Copilot Chat** and start debugging:
-   - The emulator will auto-start with MCP server enabled
-   - Load a game ROM
-   - Start chatting with Copilot about the game state
-   - You can add context from "MCP Resources" if needed
-
-### STDIO Mode with Claude Desktop
-
-#### Option 1: Desktop Extension (Recommended)
-
-The easiest way to install Geargrafx MCP server on Claude Desktop is using the MCPB package:
-
-1. **Download the latest MCPB package** for your platform from the [releases page](https://github.com/drhelius/geargrafx/releases).
-
-2. **Install the extension**:
-   - Open Claude Desktop
-   - Navigate to **Settings > Extensions**
-   - Click **Advanced settings**
-   - In the Extension Developer section, click **Install Extension…**
-   - Select the downloaded `.mcpb` file
-
-3. **Start debugging**: The extension is now available in your conversations. The emulator will automatically launch when the tool is enabled.
-
-#### Option 2: Manual Configuration
-
-If you prefer to build from source or configure manually:
-
-1. **Edit Claude Desktop config file**:
-
-   Follow [these instructions](https://modelcontextprotocol.io/quickstart/user#for-claude-desktop-users) to access Claude's config file, then edit it to include:
-
-   ```json
-   {
-     "mcpServers": {
-       "geargrafx": {
-         "command": "/path/to/geargrafx/platforms/macos/geargrafx",
-         "args": ["--mcp-stdio"]
-       }
-     }
-   }
-   ```
-
-   **Config file locations:**
-   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-   - **Linux:** `~/.config/Claude/claude_desktop_config.json`
-
-   **Important:** Update the `command` path to match your build location.
-
-2. **Restart Claude Desktop**
-
-### STDIO Mode with Claude Code
-
-1. **Add the Geargrafx MCP server** using the CLI:
-   ```bash
-   claude mcp add --transport stdio geargrafx -- /path/to/geargrafx --mcp-stdio
-   ```
-
-   **Important:** Update the path to match your build location.
+   Claude Code asks for approval the first time it uses a server from `.mcp.json`.
 
 2. **Verify the server was added**:
+
    ```bash
    claude mcp list
    ```
 
-3. **Start debugging**: Open Claude Code and start chatting about the game state. The emulator will auto-start when tools are invoked.
+3. **Start debugging**: Start Claude Code and ask about the game state. Geargrafx launches when the session starts. Run `/mcp` inside Claude Code to check the server status or reconnect it.
+
+### STDIO Mode with Codex
+
+The Codex CLI, IDE extension, and desktop app share the same MCP configuration, so you only need to add the server once.
+
+1. **Add the Geargrafx MCP server** using the CLI:
+
+   ```bash
+   codex mcp add geargrafx -- /path/to/geargrafx --mcp-stdio
+   ```
+
+   Or add it to `~/.codex/config.toml`:
+
+   ```toml
+   [mcp_servers.geargrafx]
+   command = "/path/to/geargrafx"
+   args = ["--mcp-stdio"]
+   ```
+
+   To use the server only in one project, add the same table to `.codex/config.toml` in that project. Codex loads project configuration only for trusted projects. In TOML, write Windows paths with forward slashes or in single quotes.
+
+2. **Verify the server was added**:
+
+   ```bash
+   codex mcp list
+   ```
+
+3. **Start debugging**: Start Codex and ask about the game state. Geargrafx launches when the session starts. Type `/mcp` in the Codex CLI to see the active servers.
 
 ### HTTP Mode
 
@@ -228,19 +212,19 @@ If you prefer to build from source or configure manually:
    ./geargrafx --mcp-http --mcp-http-port 3000
    ```
 
-  To bind to a custom address, set a bearer token first:
+   To bind to a custom address, set a bearer token first:
 
    ```bash
-  GEARGRAFX_MCP_HTTP_TOKEN="change-this-token" ./geargrafx --mcp-http --mcp-http-address 0.0.0.0 --mcp-http-port 3000
+   GEARGRAFX_MCP_HTTP_TOKEN="change-this-token" ./geargrafx --mcp-http --mcp-http-address 0.0.0.0 --mcp-http-port 3000
    ```
 
-  Clients must connect using the server's actual interface address, such as `http://192.168.1.50:3000/mcp`, not `0.0.0.0` or a spoofed loopback address.
+   Clients must connect using the server's actual interface address, such as `http://192.168.1.50:3000/mcp`, not `0.0.0.0` or a spoofed loopback address.
 
    You can also start the server using the "MCP" menu in the GUI.
 
 2. **Configure bearer-token authentication**:
 
-  Set `GEARGRAFX_MCP_HTTP_TOKEN` before starting HTTP mode. Authentication is optional for loopback binds and required for wildcard or other non-loopback binds.
+   Set `GEARGRAFX_MCP_HTTP_TOKEN` before starting HTTP mode. Authentication is optional for loopback binds and required for wildcard or other non-loopback binds.
 
    macOS and Linux:
 
@@ -262,23 +246,20 @@ If you prefer to build from source or configure manually:
    geargrafx.exe --mcp-http
    ```
 
-3. **Configure VS Code** `.vscode/mcp.json`:
+3. **Configure Claude Code**:
 
-   ```json
-   {
-     "servers": {
-       "geargrafx": {
-         "type": "http",
-         "url": "http://127.0.0.1:7777/mcp",
-         "headers": {
-           "Authorization": "Bearer change-this-token"
-         }
-       }
-     }
-   }
+   ```bash
+   claude mcp add --transport http --scope user geargrafx http://127.0.0.1:7777/mcp
    ```
 
-4. **Or configure Claude Desktop**:
+   If the server uses a bearer token, add the header:
+
+   ```bash
+   claude mcp add --transport http --scope user geargrafx http://127.0.0.1:7777/mcp \
+     --header "Authorization: Bearer change-this-token"
+   ```
+
+   In a shared `.mcp.json`, read the token from the environment instead of committing it:
 
    ```json
    {
@@ -287,20 +268,34 @@ If you prefer to build from source or configure manually:
          "type": "http",
          "url": "http://127.0.0.1:7777/mcp",
          "headers": {
-           "Authorization": "Bearer change-this-token"
+           "Authorization": "Bearer ${GEARGRAFX_MCP_HTTP_TOKEN}"
          }
        }
      }
    }
    ```
 
-5. **Or configure Claude Code**:
+4. **Or configure Codex**:
 
    ```bash
-   claude mcp add --transport http geargrafx http://127.0.0.1:7777/mcp
+   codex mcp add geargrafx --url http://127.0.0.1:7777/mcp
    ```
 
-6. **Restart your AI client** and start debugging
+   If the server uses a bearer token, Codex reads it from an environment variable, so set `GEARGRAFX_MCP_HTTP_TOKEN` in the environment where Codex runs too:
+
+   ```bash
+   codex mcp add geargrafx --url http://127.0.0.1:7777/mcp --bearer-token-env-var GEARGRAFX_MCP_HTTP_TOKEN
+   ```
+
+   The equivalent `~/.codex/config.toml` entry:
+
+   ```toml
+   [mcp_servers.geargrafx]
+   url = "http://127.0.0.1:7777/mcp"
+   bearer_token_env_var = "GEARGRAFX_MCP_HTTP_TOKEN"
+   ```
+
+5. **Start a new Claude Code or Codex session** and start debugging
 
 > **Note:** The MCP HTTP Server must be running standalone before connecting the AI client.
 > **Security:** Without `GEARGRAFX_MCP_HTTP_TOKEN`, HTTP mode starts only on a loopback address. Wildcard and other non-loopback binds are refused. `Host` and browser `Origin` values are matched to the connection's actual destination address to prevent DNS rebinding and address spoofing.
@@ -319,6 +314,7 @@ Once configured, you can ask your AI assistant:
 - "Pause execution and show me all sprites"
 - "Step through the next 5 instructions"
 - "Capture a screenshot of the current frame"
+- "Record a video of the next 600 frames to /path/to/clip.avi"
 - "Tap the up button on player 1 controller"
 - "Set player 1 controller to avenue pad 6 type"
 
@@ -329,6 +325,7 @@ Once configured, you can ask your AI assistant:
 - "There's a data decompression routine around address 0xC000. Step through it instruction by instruction, reverse engineer the compression algorithm, and explain how it works with examples"
 - "Find where the game stores its level data in ROM. Analyze the data structure format, create a memory map showing each section, and add symbols for the data tables"
 - "The game is rendering corrupted graphics. Examine the VDC registers, check the VRAM contents, inspect the sprite attribute table, and diagnose what's causing the corruption. Set up watches on relevant memory addresses"
+- "Profile the game for a few seconds, then tell me which functions use the most CPU time per frame and what they do"
 
 ## Available MCP Tools
 
@@ -409,6 +406,9 @@ cpu.irqs
 vdc.registers
 vdc.irqs
 vdc.dma
+vdc.sprite_budget
+vdc.sprite_limit
+vdc.missed_vblank
 vce.registers
 vce.timing
 input.reads
@@ -446,6 +446,10 @@ system.interrupts
 
 `input.turbolink` enables all four TurboLink streams. `writes` records every `$1000` O-port access, `drive` records only changes to the BU5782K pull-low outputs, `samples` records physical LINK1/LINK2 levels and the actual K result with D0-D3, and `cable` records activation/deactivation of the local emulated hardware endpoint. Shared-memory heartbeats and barriers are intentionally not emulation trace events.
 
+`vdc.sprite_budget` records one entry per active line with the number of sprites on that line against the 16-sprite limit (32-pixel-wide sprites count as two), flagging lines that hit the limit and how many sprites were dropped. `vdc.sprite_limit` records only the lines that hit the limit. Both are evaluated when the VDC fetches sprites at the end of each line and report the raster line those sprites belong to.
+
+`vdc.missed_vblank` detects frames where the game missed VBlank. It watches one CPU logical address, set with `vblank_watch_address` (hex, e.g. `2000`, `0x2000`, or `$2000`), for the access set with `vblank_watch_operation` (`read`, `write`, or `read_write`). Every CPU bus access counts, including opcode fetches and block transfers. At each VDC1 VBlank the frame that just ended is checked, and if the watched access did not happen during it, a `VBLANK MISSED` entry is logged with the watched address, operation, and the number of consecutive missed frames. The first VBlank after starting the logger, changing the watch, resetting, or loading a state only arms the check. Both parameters persist in the configuration and keep their current values when omitted; the response echoes them when `vdc.missed_vblank` is active. The watch costs nothing while this filter is not active.
+
 The `system` streams cover TAM/MPR mappings, Street Fighter II mapper latch updates, and HuC6280 interrupt-controller mask/acknowledgement writes. ADPCM lines include playing, pending, half-IRQ, and end-IRQ state bits.
 
 #### Trace storage
@@ -455,6 +459,10 @@ Starting a stopped logger without `output` selects `memory`. Memory capacities a
 Storage changes while tracing is active cleanly stop and restart the logger. Repeating the active storage configuration is idempotent and only updates filters. Stopping preserves retained memory entries; changing memory capacity or starting disk output resets the ring used by that recording. Disk output is flushed before stop, reset, media changes, physical CD-ROM eject/error, save-state loads, and shutdown. Failures are reported in the UI and application log but do not cancel unrelated emulator operations.
 
 `output_path` is a directory only, not a filename. Geargrafx creates a unique timestamped UTF-compatible trace filename in that directory. When omitted, the configured default, media, or custom directory policy remains in effect.
+
+### Profiler
+- `set_profiler` - Start, stop, or reset the function profiler with `action` (`start`, `stop`, `reset`). `start` opens the Profiler debugger window and `stop` closes it. Statistics are only collected while the window is visible (in headless mode, while started), starting on the next frame
+- `get_profiler_data` - Read profiler results: `collecting`, `window_open`, `total_cycles`, `frame_cycles`, `frames`, `function_count`, and per-function `name`, `symbol`, `bank`, `address`, `type`, `calls`, `calls_per_frame`, `inclusive_cycles`, `inclusive_percent`, `exclusive_cycles`, `exclusive_percent`, `average_cycles`, `min_cycles`, and `max_cycles`. Optional `sort` (`inclusive`, `exclusive`, `calls`, `average`, `max`; highest first), `count` (default 50, max 1000), and `filter` (name or hex address substring)
 
 ### Breakpoints
 - `set_breakpoint` - Set execution, read, or write breakpoint (supports 5 memory areas: rom_ram, vram, palette, huc6270_reg, huc6260_reg)
@@ -469,9 +477,9 @@ Storage changes while tracing is active cleanly stop and restart the logger. Rep
 - `get_huc6260_status` - Get VCE status (position, sync signals, control)
 - `get_huc6202_status` - Get VPC status (SuperGrafx only)
 - `get_psg_status` - Get PSG status for all 6 channels
-- `get_cdrom_status` - Get CD-ROM drive status (CD games only)
+- `get_cdrom_status` - Get CD-ROM or LaserActive drive status, including the signed disc-head LBA, sample/frame position, search-burst phase, analog mute/fade counters, SRAM latch, and PD6103A registers/freeze state. Inspection does not advance emulated state.
 - `list_cdrom_tracks` - List CD-ROM track types and LBA ranges
-- `get_cdrom_audio_status` - Get CD-ROM audio playback status
+- `get_cdrom_audio_status` - Get CD-ROM audio playback status, or the shared LaserActive transport and mixed analog/digital output status
 - `get_adpcm_status` - Get ADPCM audio status
 - `get_arcade_card_status` - Get Arcade Card status
 - `get_turbolink_status` - Get BU5782K SEL/CLR and pull-low state, the last actual K/line sample with D0-D3 and event ticks, plus shared-memory membership, hardware readiness, pacing, progress, barrier, lease, generation, and recovery diagnostics
@@ -483,12 +491,18 @@ Storage changes while tracing is active cleanly stop and restart the logger. Rep
 
 ### Screen Capture
 - `get_screenshot` - Capture current screen frame as base64 PNG
+- `start_video_recording` - Start recording video and audio to an AVI file (MJPEG, uncompressed or PNG compressed video, 16-bit PCM audio). Only the resulting `file_path` is returned; the video stays on disk. Optional `file_path` (absolute; if omitted, an automatic name in the configured video recordings directory), `scale` (1-20), `aspect_ratio` (`screen`, `square`, `4:3`, `16:9`, `16:10`, `6:5`), and `quality` (`low`, `medium`, `high`, `lossless`, `lossless_compressed`). `lossless` is uncompressed; `lossless_compressed` stores PNG frames, much smaller but playable only with FFmpeg based players. Given options update the recording settings, same as the GUI menu. `screen` follows the display aspect ratio, which uses square pixels while debugging. When a shader preset is active outside debug mode, the shader output is recorded at the output window size and `scale` and `aspect_ratio` are ignored. Frames are recorded only while the emulator runs, so continue or step execution before stopping
+- `stop_video_recording` - Stop the active recording and finalize the AVI file. Returns `file_path` and the number of recorded `frames`
 
 ### Media & State Management
-- `get_media_info` - Get loaded ROM/CD info
+- `get_media_info` - Get loaded ROM/CD info, including native MMI catalog, selected side, format and eject state fields
 - `list_recent_media` - List the 10 most recent ROM files or CD-ROM images opened by Geargrafx
-- `load_media` - Load ROM file or CD-ROM image (.pce, .sgx, .hes, .cue, .zip). Automatically loads .sym symbol file if present
-- `load_bios` - Load a BIOS file for CD-ROM emulation. Two types: 'syscard' (System Card, 256KB) and 'gameexpress' (Game Express, 32KB)
+- `load_media` - Load ROM or disc media (.pce, .sgx, .hes, .cue, .chd, .mmi, .zip). Automatically loads .sym symbol file if present
+- `load_bios` - Load a CD-ROM or LaserActive BIOS. Types: `syscard`, `gameexpress`, `pac_japan`, and `pac_us`
+- `list_mmi_media` - List the media/sides in the loaded MMI in sequence order
+- `eject_mmi_media` - Eject the virtual LaserDisc without resetting the machine
+- `insert_mmi_media` - Insert the selected virtual LaserDisc medium
+- `select_mmi_media` - Select a zero-based MMI media index while the virtual disc is ejected; indices follow sequence order and do not reset the CPU or RAM
 - `load_symbols` - Load debug symbols from file (.sym format with 'BANK:ADDRESS LABEL' entries)
 - `list_save_state_slots` - List all 5 save state slots with information (rom name, timestamp, validity)
 - `select_save_state_slot` - Select active save state slot (1-5) for save/load operations
@@ -501,8 +515,13 @@ Storage changes while tracing is active cleanly stop and restart the logger. Rep
 - `get_rewind_status` - Get rewind buffer status (enabled, snapshots, capacity, buffered seconds)
 - `rewind_seek` - Seek to a specific rewind snapshot while paused
 
+### Cheats
+- `list_cheats` - List cheats with index, code, description, enabled, valid and active state
+- `add_cheat` - Add an enabled cheat: `AAAAAA:VV` or `AAAAAA?CC:VV` at a 21-bit physical address (e.g. `1F0DB1:09`), join codes with `+`
+- `remove_cheat` - Remove a cheat by index
+
 ### Controller Input
-- `controller_button` - Control a button on a controller (player 1-5). Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, select, run, I, II, III, IV, V, VI
+- `controller_button` - Control a button on a controller (player 1-5). Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, select, run, I, II, III, IV, V, VI. Loading a state or rewinding resyncs input to the host controllers, releasing held buttons; press them again afterwards
 - `controller_macro` - Run an ordered input macro. Top-level `player` defaults to 1, and each command may override it. Supported commands are `tap`, `press`, `release`, and `wait`; timing is explicit through `wait` frame counts
 - `get_input_state` - Get effective pressed buttons and current controller input state
 - `controller_set_type` - Set controller type for a player: standard (2 buttons), avenue_pad_3 (3 buttons), avenue_pad_6 (6 buttons)
@@ -513,7 +532,7 @@ Storage changes while tracing is active cleanly stop and restart the logger. Rep
 
 In addition to tools, the MCP server provides documentation resources that AI assistants can access to better understand the PC Engine / TurboGrafx-16 hardware and programming.
 
-MCP clients usually offer resources in the "Add context..." section of the chat interface. You may need to manually add them when you think they are relevant.
+In Claude Code, type `@` in your prompt to pick a resource, or reference one directly, for example `@geargrafx:geargrafx://hardware/huc6280_cpu`. Codex reads resources through its built-in MCP resource tools, so ask it to read the ones that are relevant.
 
 ### Hardware Documentation Resources
 
@@ -540,8 +559,8 @@ Complete technical reference documentation for all PC Engine / TurboGrafx-16 har
 ### STDIO Transport
 ```
 ┌─────────────────┐                    ┌──────────────────┐
-│   VS Code /     │       stdio        │    Geargrafx     │
-│ Claude Desktop  │◄──────────────────►│    MCP Server    │
+│  Claude Code /  │       stdio        │    Geargrafx     │
+│      Codex      │◄──────────────────►│    MCP Server    │
 │   (AI Client)   │       pipes        │   (background)   │
 └─────────────────┘                    └──────────────────┘
         │                                       │
@@ -558,8 +577,8 @@ Complete technical reference documentation for all PC Engine / TurboGrafx-16 har
 ### HTTP Transport
 ```
 ┌─────────────────┐                    ┌──────────────────┐
-│   VS Code /     │  HTTP (port 7777)  │    Geargrafx     │
-│ Claude Desktop  │◄──────────────────►│ MCP HTTP Server  │
+│  Claude Code /  │  HTTP (port 7777)  │    Geargrafx     │
+│      Codex      │◄──────────────────►│ MCP HTTP Server  │
 │   (AI Client)   │                    │    (listener)    │
 └─────────────────┘                    └──────────────────┘
                                                 │

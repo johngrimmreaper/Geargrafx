@@ -54,7 +54,17 @@ static bool memory_settings_read_editor(std::istream& stream, std::vector<MemEdi
 void gui_debug_memory_init(void)
 {
     gui_debug_memory_reset();
+    gui_debug_memory_apply_settings();
 
+    for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
+    {
+        if (i != MEMORY_EDITOR_PHYSICAL)
+            mem_edit[i].SetBreakpointCallback(toggle_memory_breakpoint, i);
+    }
+}
+
+void gui_debug_memory_apply_settings(void)
+{
     for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
     {
         MemEditor::Options options;
@@ -64,9 +74,6 @@ void gui_debug_memory_init(void)
         options.uppercase_hex = config_debug.mem_editor_uppercase_hex[i];
         options.gray_out_zeros = config_debug.mem_editor_gray_out_zeros[i];
         mem_edit[i].SetOptions(options);
-
-        if (i != MEMORY_EDITOR_PHYSICAL)
-            mem_edit[i].SetBreakpointCallback(toggle_memory_breakpoint, i);
     }
 }
 
@@ -93,14 +100,17 @@ void gui_debug_memory_reset(void)
     HuC6270* huc6270_2 = core->GetHuC6270_2();
     Adpcm* adpcm = core->GetAdpcm();
     bool is_sgx = media->IsSGX();
+    bool is_laser_active = media->IsLaserActive();
+    u8* mapped_rom = is_laser_active ? media->GetMappedBios() : media->GetROM();
+    int mapped_rom_size = is_laser_active ? media->GetMappedBiosSize() : media->GetROMSize();
 
     mem_edit[MEMORY_EDITOR_LOGICAL].Reset("LOGICAL", 0x10000, logical_memory_read, logical_memory_write, logical_memory_can_write, memory);
     mem_edit[MEMORY_EDITOR_LOGICAL].SetAddressFormatter(logical_memory_format_address, 7);
     mem_edit[MEMORY_EDITOR_PHYSICAL].Reset("PHYSICAL", 0x200000, physical_memory_read, physical_memory_write, physical_memory_can_write, memory);
     mem_edit[MEMORY_EDITOR_RAM].Reset("SYSTEM RAM", memory->GetWorkingRAM(), 0x2000 * (is_sgx ? 4 : 1));
     mem_edit[MEMORY_EDITOR_ZERO_PAGE].Reset("ZP", memory->GetWorkingRAM(), 0x100);
-    mem_edit[MEMORY_EDITOR_ROM].Reset("ROM", media->GetROM(), media->GetROMSize());
-    mem_edit[MEMORY_EDITOR_CARD_RAM].Reset("CARD RAM", memory->GetCardRAM(), memory->GetCardRAMSize());
+    mem_edit[MEMORY_EDITOR_ROM].Reset(is_laser_active ? "BIOS" : "ROM", mapped_rom, mapped_rom_size);
+    mem_edit[MEMORY_EDITOR_CARD_RAM].Reset(is_laser_active ? "PAC SRAM" : "CARD RAM", memory->GetCardRAM(), memory->GetCardRAMSize());
     mem_edit[MEMORY_EDITOR_BACKUP_RAM].Reset("BRAM", memory->GetBackupRAM(), 0x800);
     mem_edit[MEMORY_EDITOR_PALETTES].Reset("PALETTES", (u8*)huc6260->GetColorTable(), 512, 0, 2);
     mem_edit[MEMORY_EDITOR_VRAM_1].Reset(is_sgx ? "VRAM 1" : "VRAM", (u8*)huc6270_1->GetVRAM(), HUC6270_VRAM_SIZE, 0, 2);
@@ -118,7 +128,6 @@ void gui_debug_window_memory(void)
     for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
     {
         mem_edit[i].SetGuiFont(gui_roboto_font);
-        mem_edit[i].WatchPopup();
         mem_edit[i].BookMarkPopup();
     }
 
@@ -157,6 +166,12 @@ void gui_debug_memory_find_bytes_window(void)
         ImGui::PushFont(gui_default_font);
         mem_edit[i].DrawFindBytesWindow();
         ImGui::PopFont();
+
+        if (mem_edit[i].ConsumeShowRequest())
+        {
+            config_debug.show_memory = true;
+            mem_edit_select = i;
+        }
     }
 }
 
@@ -164,6 +179,8 @@ void gui_debug_memory_watches_window(void)
 {
     for (int i = 0; i < MEMORY_EDITOR_MAX; i++)
     {
+        mem_edit[i].SetGuiFont(gui_roboto_font);
+        mem_edit[i].WatchPopup();
         ImGui::PushFont(gui_default_font);
         mem_edit[i].DrawWatchWindow();
         ImGui::PopFont();
@@ -195,6 +212,7 @@ void gui_debug_memory_select_all(void)
 
 void gui_debug_memory_goto(int editor, int address)
 {
+    config_debug.show_memory = true;
     mem_edit_select = editor;
     mem_edit[mem_edit_select].JumpToAddress(address);
 }
@@ -217,7 +235,7 @@ static void draw_tabs(void)
     GeargrafxCore* core = emu_get_core();
     Media* media = core->GetMedia();
     bool is_sgx = media->IsSGX();
-    bool is_cdrom = media->IsCDROM();
+    bool is_cdrom = media->IsCDROMHardwareEnabled();
     bool is_arcade_card = core->GetMedia()->IsArcadeCard();
 
     static const int tab_order[MEMORY_EDITOR_MAX] =
@@ -246,7 +264,7 @@ static void draw_tabs(void)
 
         if (!is_sgx && (i == MEMORY_EDITOR_VRAM_2 || i == MEMORY_EDITOR_SAT_2))
             continue;
-        if (i == MEMORY_EDITOR_ROM && !IsValidPointer(media->GetROM()))
+        if (i == MEMORY_EDITOR_ROM && !IsValidPointer(media->GetROM()) && !media->IsLaserActive())
             continue;
         if (i == MEMORY_EDITOR_CARD_RAM && core->GetMemory()->GetCardRAMSize() == 0)
             continue;
@@ -351,12 +369,12 @@ static void memory_editor_menu(void)
 
     if (ImGui::BeginMenu("Edit"))
     {
-        if (ImGui::MenuItem("Copy", "Ctrl+C"))
+        if (ImGui::MenuItem("Copy", CONFIG_PRIMARY_LABEL "C"))
         {
             gui_debug_memory_copy();
         }
 
-        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+        if (ImGui::MenuItem("Paste", CONFIG_PRIMARY_LABEL "V"))
         {
             gui_debug_memory_paste();
         }
@@ -366,7 +384,7 @@ static void memory_editor_menu(void)
 
     if (ImGui::BeginMenu("Selection"))
     {
-        if (ImGui::MenuItem("Select All", "Ctrl+A"))
+        if (ImGui::MenuItem("Select All", CONFIG_PRIMARY_LABEL "A"))
         {
             mem_edit[current_mem_edit].SelectAll();
         }
@@ -502,6 +520,7 @@ bool gui_debug_memory_select_range(int editor, int start_address, int end_addres
     if (!mem_edit[editor].SetSelection(start_address, end_address))
         return false;
 
+    config_debug.show_memory = true;
     mem_edit_select = editor;
     mem_edit[editor].ScrollToAddress(start_address);
 
@@ -570,14 +589,6 @@ bool gui_debug_memory_add_watch(int editor, int address, const char* notes, int 
     }
 
     return mem_edit[editor].AddWatchDirect(address, notes, size_index);
-}
-
-void gui_debug_memory_open_watch_popup(int editor, int address, const char* notes)
-{
-    if (editor < 0 || editor >= MEMORY_EDITOR_MAX)
-        return;
-
-    mem_edit[editor].PrepareAddWatch(address, notes);
 }
 
 void gui_debug_memory_remove_watch(int editor, int address)

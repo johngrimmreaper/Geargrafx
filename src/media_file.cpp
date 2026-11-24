@@ -55,20 +55,43 @@ MediaFile* MediaFile::OpenFile(const char* path)
     return NULL;
 }
 
-void MediaFile::SetVfsInterface(const retro_vfs_interface* iface)
+void MediaFile::SetVfsInterface(const retro_vfs_interface* iface, unsigned version)
 {
 #if defined(__LIBRETRO__)
-    MediaFileLibretro::SetVfsInterface(iface);
+    MediaFileLibretro::SetVfsInterface(iface, version);
 #else
     (void)iface;
+    (void)version;
 #endif
 }
 
-bool MediaFile::HasVfsInterface()
+bool MediaFile::ReadExact(void* buffer, u64 size)
 {
-#if defined(__LIBRETRO__)
-    return MediaFileLibretro::HasVfsInterface();
-#else
-    return false;
-#endif
+    if ((size > (u64)SIZE_MAX) || (!IsValidPointer(buffer) && (size != 0)))
+        return false;
+
+    u8* destination = reinterpret_cast<u8*>(buffer);
+    u64 total = 0;
+
+    while (total < size)
+    {
+        s64 read = Read(destination + total, size - total);
+        if ((read <= 0) || ((u64)read > (size - total)))
+            return false;
+
+        total += (u64)read;
+    }
+
+    return true;
+}
+
+bool MediaFile::ReadAt(u64 offset, void* buffer, u64 size)
+{
+    if (!CanSeek() || (offset > (u64)INT64_MAX))
+        return false;
+
+    if (!Seek((s64)offset))
+        return false;
+
+    return ReadExact(buffer, size);
 }

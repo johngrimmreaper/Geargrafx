@@ -31,7 +31,7 @@ public:
     MediaFileLibretro();
     virtual ~MediaFileLibretro();
 
-    static void SetVfsInterface(const retro_vfs_interface* iface);
+    static void SetVfsInterface(const retro_vfs_interface* iface, unsigned version);
     static bool HasVfsInterface();
     static bool IsCdRomUriPath(const char* path);
 
@@ -39,6 +39,7 @@ public:
     virtual void Close() override;
     virtual bool IsOpen() const override;
     virtual bool IsValid() const override;
+    virtual bool CanSeek() const override;
     virtual s64 GetSize() override;
     virtual s64 Tell() override;
     virtual bool Seek(s64 offset) override;
@@ -51,6 +52,7 @@ private:
 
 private:
     static const retro_vfs_interface* s_vfs_interface;
+    static unsigned s_vfs_version;
     LibretroVfsFile m_file;
     char* m_path;
     s64 m_position;

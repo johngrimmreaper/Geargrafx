@@ -45,6 +45,8 @@ void CdRomChdImage::Reset()
 {
     CdRomImage::Reset();
 
+    DestroyHunkCache();
+
     m_hunk_bytes = 0;
     m_hunk_count = 0;
     m_sectors_per_hunk = 0;
@@ -52,8 +54,6 @@ void CdRomChdImage::Reset()
     chd_close(m_chd_file);
     InitPointer(m_chd_file);
     SafeDelete(m_file_adapter);
-
-    DestroyHunkCache();
 }
 
 bool CdRomChdImage::LoadFromFile(const char* path, bool preload)
@@ -172,7 +172,7 @@ bool CdRomChdImage::ReadSector(u32 lba, u8* buffer)
     }
 
     const Track& track = m_toc.tracks[(size_t)track_index];
-    u32 sector_index = (lba - track.start_lba) + track.file_offset;
+    u32 sector_index = (lba - track.start_lba) + (u32)track.file_offset;
     u32 hunk_index  = sector_index / m_sectors_per_hunk;
     u32 hunk_offset = sector_index % m_sectors_per_hunk;
     u32 byte_offset_in_hunk = hunk_offset * (2352 + 96);
@@ -219,7 +219,7 @@ bool CdRomChdImage::ReadSamples(u32 lba, u32 offset, s16* buffer, u32 count)
         return false;
     }
 
-    s32 track_index = FindTrackFromLBA(lba, false);
+    s32 track_index = FindTrackFromLBA(lba, true);
     if (track_index < 0)
     {
         Error("ReadBytes failed - LBA %d not found in any track", lba);
@@ -227,7 +227,14 @@ bool CdRomChdImage::ReadSamples(u32 lba, u32 offset, s16* buffer, u32 count)
     }
 
     const Track& track = m_toc.tracks[(size_t)track_index];
-    u32 sector_index = (lba - track.start_lba) + track.file_offset;
+
+    if ((lba < track.start_lba) && !track.lead_in_stored)
+    {
+        Error("ReadBytes failed - LBA %d is in a pregap the image does not store", lba);
+        return false;
+    }
+
+    u32 sector_index = (u32)track.file_offset + lba - track.start_lba;
     u32 hunk_index  = sector_index / m_sectors_per_hunk;
     u32 hunk_offset = sector_index % m_sectors_per_hunk;
     u32 byte_offset_in_hunk = hunk_offset * (2352 + 96);
@@ -285,7 +292,7 @@ bool CdRomChdImage::PreloadDisc()
     return true;
 }
 
-bool CdRomChdImage::PreloadTrack(u32 track_number)
+bool CdRomChdImage::PreloadTrack(u32 track_number, u32 lba)
 {
     if (track_number >= m_toc.tracks.size())
     {
@@ -295,30 +302,28 @@ bool CdRomChdImage::PreloadTrack(u32 track_number)
 
     const Track& track = m_toc.tracks[track_number];
 
-    if (track.sector_count == 0)
-        return true;
+    if ((lba < track.start_lba) || (lba > track.end_lba))
+    {
+        Error("PreloadTrack failed - LBA %u out of track %u bounds", lba, track_number + 1);
+        return false;
+    }
 
-    u32 first_sector = track.file_offset;
-    u32 last_sector = 0;
+    u32 sector_index = 0;
 
-    if (!checked_add_u32(track.file_offset, track.sector_count - 1, &last_sector))
+    if (!checked_add_u32((u32)track.file_offset, lba - track.start_lba, &sector_index))
     {
         Error("PreloadTrack failed - Track sector range overflow");
         return false;
     }
 
-    u32 first_hunk = first_sector / m_sectors_per_hunk;
-    u32 last_hunk  = last_sector  / m_sectors_per_hunk;
+    u32 hunk = sector_index / m_sectors_per_hunk;
 
-    Debug("Preloading track %u: hunks %u to %u", track_number + 1, first_hunk, last_hunk);
+    Debug("Preloading track %u from LBA %u: hunk %u", track_number + 1, lba, hunk);
 
-    for (u32 hunk = first_hunk; hunk <= last_hunk; hunk++)
+    if (!LoadHunk(hunk))
     {
-        if (!LoadHunk(hunk))
-        {
-            Error("PreloadTrack failed - Unable to load hunk %u", hunk);
-            return false;
-        }
+        Error("PreloadTrack failed - Unable to load hunk %u", hunk);
+        return false;
     }
 
     return true;
@@ -338,12 +343,14 @@ bool CdRomChdImage::ReadTOC()
         int track = 0, frames = 0, pregap = 0, postgap = 0;
         char type[64], subtype[32], pgtype[32], pgsub[32];
         type[0] = subtype[0] = pgtype[0] = pgsub[0] = 0;
+        memset(metadata, 0, sizeof(metadata));
 
-        err = chd_get_metadata(m_chd_file, CDROM_TRACK_METADATA2_TAG, i, metadata, sizeof(metadata), NULL, NULL, NULL);
+        err = chd_get_metadata(m_chd_file, CDROM_TRACK_METADATA2_TAG, i, metadata, sizeof(metadata) - 1, NULL, NULL, NULL);
 
         if (err == CHDERR_NONE)
         {
-            if (sscanf(metadata, CDROM_TRACK_METADATA2_FORMAT, &track, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
+            if (sscanf(metadata, "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d PREGAP:%d PGTYPE:%31s PGSUB:%31s POSTGAP:%d",
+                &track, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
             {
                 Error("Failed to parse CDROM_TRACK_METADATA2_FORMAT for track %d", i + 1);
                 return false;
@@ -352,10 +359,10 @@ bool CdRomChdImage::ReadTOC()
         }
         else
         {
-            err = chd_get_metadata(m_chd_file, CDROM_TRACK_METADATA_TAG, i, metadata, sizeof(metadata), NULL, NULL, NULL);
+            err = chd_get_metadata(m_chd_file, CDROM_TRACK_METADATA_TAG, i, metadata, sizeof(metadata) - 1, NULL, NULL, NULL);
             if (err == CHDERR_NONE)
             {
-                if (sscanf(metadata, CDROM_TRACK_METADATA_FORMAT, &track, type, subtype, &frames) != 4)
+                if (sscanf(metadata, "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d", &track, type, subtype, &frames) != 4)
                 {
                     Error("Failed to parse CDROM_TRACK_METADATA_FORMAT for track %d", i + 1);
                     return false;
@@ -396,7 +403,9 @@ bool CdRomChdImage::ReadTOC()
         Track new_track;
         InitTrack(new_track);
 
-        new_track.type = GetTrackType(type);
+        if (!GetTrackType(type, new_track.type))
+            return false;
+
         new_track.sector_size = TrackTypeSectorSize(new_track.type);
 
         new_track.start_lba = current_lba;
@@ -406,6 +415,7 @@ bool CdRomChdImage::ReadTOC()
         {
             new_track.has_lead_in = true;
             new_track.lead_in_lba = current_lba - pregap_real - pregap_dv;
+            new_track.lead_in_stored = pregap_dv > 0;
         }
 
         u32 data_frames = (u32)frames - pregap_dv;
@@ -427,7 +437,7 @@ bool CdRomChdImage::ReadTOC()
             return false;
         }
 
-        // Update file_offset: pregap_dv + data + postgap + alignment to 4 sectors
+        // Update file_offset: pregap_dv + data + alignment to 4 sectors, postgaps are not stored
         if (!checked_add_u32(file_offset, pregap_dv, &file_offset))
         {
             Error("Invalid CHD metadata for track %d - File offset overflow", i + 1);
@@ -439,7 +449,6 @@ bool CdRomChdImage::ReadTOC()
         u32 frame_padding = (4 - ((u32)frames & 3)) & 3;
 
         if (!checked_add_u32(file_offset, data_frames, &file_offset) ||
-            !checked_add_u32(file_offset, (u32)postgap, &file_offset) ||
             !checked_add_u32(file_offset, frame_padding, &file_offset))
         {
             Error("Invalid CHD metadata for track %d - File offset overflow", i + 1);
@@ -529,8 +538,9 @@ void CdRomChdImage::CalculateCRC()
         return;
     }
 
-    u32 sector_data_size = 2048;
-    u8* buffer = new u8[sector_data_size];
+    const u32 sector_data_size = 2048;
+    u8 buffer[sector_data_size];
+    u32 current_sector = m_current_sector;
 
     u32 sectors_to_crc = 64;
     u32 first_sector = 1;
@@ -544,14 +554,14 @@ void CdRomChdImage::CalculateCRC()
         if (!ReadSector(sec + first_data_track->start_lba, buffer))
         {
             Error("CRC ReadSector failed for LBA %u", sec + first_data_track->start_lba);
-            SafeDeleteArray(buffer);
+            m_current_sector = current_sector;
             return;
         }
 
         m_crc = CalculateCRC32(m_crc, buffer, sector_data_size);
     }
 
-    SafeDeleteArray(buffer);
+    m_current_sector = current_sector;
 }
 
 bool CdRomChdImage::InitHunkCache()
@@ -608,6 +618,7 @@ bool CdRomChdImage::LoadHunk(u32 hunk_index)
         if (err != CHDERR_NONE)
         {
             Error("CHD read hunk %u failed: %d, %s", hunk_index, err, chd_error_string(err));
+            SafeDeleteArray(m_hunk_cache[hunk_index]);
             return false;
         }
     }
@@ -615,17 +626,19 @@ bool CdRomChdImage::LoadHunk(u32 hunk_index)
     return true;
 }
 
-GG_CdRomTrackType CdRomChdImage::GetTrackType(const char* type_str)
+bool CdRomChdImage::GetTrackType(const char* type_str, GG_CdRomTrackType& type)
 {
     if (strcmp(type_str, "AUDIO") == 0)
-        return GG_CDROM_AUDIO_TRACK;
+        type = GG_CDROM_AUDIO_TRACK;
     else if (strcmp(type_str, "MODE1") == 0)
-        return GG_CDROM_DATA_TRACK_MODE1_2048;
+        type = GG_CDROM_DATA_TRACK_MODE1_2048;
     else if (strcmp(type_str, "MODE1_RAW") == 0)
-        return GG_CDROM_DATA_TRACK_MODE1_2352;
+        type = GG_CDROM_DATA_TRACK_MODE1_2352;
     else
     {
-        Debug("WARNING: Unknown track type '%s', defaulting to AUDIO", type_str);
-        return GG_CDROM_AUDIO_TRACK;
+        Error("Unsupported CHD track type: %s", type_str);
+        return false;
     }
+
+    return true;
 }

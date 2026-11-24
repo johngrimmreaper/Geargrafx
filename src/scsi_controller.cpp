@@ -26,6 +26,7 @@
 #include "huc6280.h"
 #include "random.h"
 #include "trace_logger.h"
+#include "laseractive.h"
 
 static const u32 k_scsi_command_buffer_capacity = 16;
 static const u32 k_scsi_data_buffer_capacity = 2048;
@@ -35,11 +36,12 @@ static const u32 k_scsi_initial_read_phase_max_cycles = GG_MASTER_CLOCK_RATE / 6
 static const u8 k_scsi_command_buffer_padding[k_scsi_command_buffer_capacity] = {};
 static const u8 k_scsi_data_buffer_padding[k_scsi_data_buffer_capacity] = {};
 
-ScsiController::ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio, Random* random)
+ScsiController::ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio, Random* random, LaserActive* laseractive)
 {
     m_cdrom_media = cdrom_media;
     m_cdrom_audio = cdrom_audio;
     m_random = random;
+    m_laseractive = laseractive;
     InitPointer(m_trace_logger);
     m_bus.db = 0;
     m_bus.signals = 0;
@@ -51,6 +53,9 @@ ScsiController::ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio,
     m_load_sector_count = 0;
     m_auto_ack_cycles = 0;
     m_initial_read_phase_cycles = 0;
+    m_reset_value = -1;
+    m_read_speed = 1;
+    m_access_count = 0;
     m_command_buffer.clear();
     m_command_buffer.reserve(k_scsi_command_buffer_capacity);
     m_data_buffer.clear();
@@ -68,19 +73,14 @@ ScsiController::ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio,
     m_state.NEXT_LOAD_CYCLES = &m_next_load_cycles;
     m_state.LOAD_SECTOR = &m_load_sector;
     m_state.LOAD_SECTOR_COUNT = &m_load_sector_count;
-    m_state.AUTO_ACK_CYCLES = &m_auto_ack_cycles;
-    m_state.COMMAND_BUFFER = &m_command_buffer;
-    m_state.DATA_BUFFER = &m_data_buffer;
-    m_state.DATA_BUFFER_OFFSET = &m_data_buffer_offset;
 }
 
 ScsiController::~ScsiController()
 {
 }
 
-void ScsiController::Init(HuC6280* huc6280, CdRom* cdrom)
+void ScsiController::Init(CdRom* cdrom)
 {
-    m_huc6280 = huc6280;
     m_cdrom = cdrom;
     Reset();
 }
@@ -88,6 +88,16 @@ void ScsiController::Init(HuC6280* huc6280, CdRom* cdrom)
 void ScsiController::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
+}
+
+void ScsiController::SetResetValue(int value)
+{
+    m_reset_value = value;
+}
+
+void ScsiController::SetReadSpeed(int speed)
+{
+    m_read_speed = (u32)CLAMP(speed, 1, 6);
 }
 
 void ScsiController::LogScsiEvent(u8 event, u8 command, u8 phase, u8 status,
@@ -192,7 +202,10 @@ void ScsiController::Reset(bool keep_rst_signal)
     m_auto_ack_cycles = 0;
     if (!keep_rst_signal)
     {
-        m_initial_read_phase_cycles = m_random->Next(k_scsi_initial_read_phase_max_cycles + 1);
+        if (m_reset_value < 0)
+            m_initial_read_phase_cycles = m_random->Next(k_scsi_initial_read_phase_max_cycles + 1);
+        else
+            m_initial_read_phase_cycles = MIN((u32)m_reset_value, k_scsi_initial_read_phase_max_cycles);
     }
     m_command_buffer.clear();
     m_data_buffer.clear();
@@ -517,8 +530,10 @@ void ScsiController::CommandRead()
 
     u32 current_lba = m_cdrom_media->GetCurrentSector();
     u32 seek_time = m_cdrom_media->SeekTime(current_lba, lba);
-    u32 seek_cycles = TimeToCycles(seek_time * 1000);
-    u32 transfer_cycles = m_cdrom_media->SectorTransferCycles();
+    u32 seek_cycles = ReadCycles(TimeToCycles(seek_time * 1000));
+    u32 transfer_cycles = ReadCycles(m_cdrom_media->SectorTransferCycles());
+    if (m_laseractive->IsActive())
+        seek_cycles = m_laseractive->NotifyScsiReadStart(lba);
 
     if (m_initial_read_phase_cycles > 0)
     {
@@ -529,6 +544,7 @@ void ScsiController::CommandRead()
     m_next_load_cycles = seek_cycles + transfer_cycles;
     m_load_sector = lba;
     m_load_sector_count = count;
+    m_access_count++;
 
     SCSI_DEBUG("SCSI CMD Read: current lba %d, target lba %d, count %d, seek cycles %d, transfer cycles %d", current_lba, lba, count, seek_cycles, transfer_cycles);
 
@@ -556,9 +572,15 @@ void ScsiController::CommandAudioStartPosition()
 
     SCSI_DEBUG("SCSI CMD Audio Start Position: start LBA %d, mode %02X", start_lba, mode);
 
+    if (!m_cdrom_media->IsReady())
+    {
+        StartStatus(SCSI_STATUS_CHECK_CONDITION);
+        return;
+    }
+
     m_cdrom_audio->StartAudio(start_lba, mode == 0);
 
-    if (mode == 0)
+    if ((mode == 0) && !m_cdrom_audio->IsSeeking())
         StartStatus(SCSI_STATUS_GOOD);
     else
         SetPhase(SCSI_PHASE_BUSY);
@@ -574,6 +596,12 @@ void ScsiController::CommandAudioStopPosition()
     u8 mode = m_command_buffer[1];
 
     SCSI_DEBUG("SCSI CMD Audio Stop Position: stop LBA %d, mode %02X", stop_lba, mode);
+
+    if (!m_cdrom_media->IsReady())
+    {
+        StartStatus(SCSI_STATUS_CHECK_CONDITION);
+        return;
+    }
 
     switch (mode)
     {
@@ -608,6 +636,12 @@ void ScsiController::CommandAudioPause()
     SCSI_DEBUG("SCSI CMD Audio Pause");
     SCSI_DEBUG("******");
 
+    if (!m_cdrom_media->IsReady())
+    {
+        StartStatus(SCSI_STATUS_CHECK_CONDITION);
+        return;
+    }
+
     m_cdrom_audio->PauseAudio();
 
     StartStatus(SCSI_STATUS_GOOD);
@@ -618,6 +652,12 @@ void ScsiController::CommandReadSubcodeQ()
     SCSI_DEBUG("******");
     SCSI_DEBUG("SCSI CMD Read Subcode Q");
     SCSI_DEBUG("******");
+
+    if (!m_cdrom_media->IsReady())
+    {
+        StartStatus(SCSI_STATUS_CHECK_CONDITION);
+        return;
+    }
 
     CdRomAudio::CdAudioState audio_state = m_cdrom_audio->GetSubcodeState();
     u32 current_lba = (m_cdrom_audio->GetCurrentState() == CdRomAudio::CD_AUDIO_STATE_IDLE) ?
@@ -648,6 +688,30 @@ void ScsiController::CommandReadSubcodeQ()
     buffer[8] = DecToBcd(absolute.seconds);
     buffer[9] = DecToBcd(absolute.frames);
 
+    if (m_cdrom_media->IsMmi())
+    {
+        s32 lba = m_laseractive->IsActive() ? m_laseractive->GetHeadLba() : (s32)current_lba;
+        u8 captured_q[12];
+
+        if (m_cdrom_media->ReadSubchannelQ(lba, captured_q))
+        {
+            memcpy(buffer + 1, captured_q, 6);
+            memcpy(buffer + 7, captured_q + 7, 3);
+        }
+        else if (lba < 0)
+        {
+            LbaToMsf((u32)-(s64)lba, &relative);
+            LbaToMsf((u32)MAX((s64)lba + 150, 0LL), &absolute);
+            buffer[3] = 0;
+            buffer[4] = DecToBcd(relative.minutes);
+            buffer[5] = DecToBcd(relative.seconds);
+            buffer[6] = DecToBcd(relative.frames);
+            buffer[7] = DecToBcd(absolute.minutes);
+            buffer[8] = DecToBcd(absolute.seconds);
+            buffer[9] = DecToBcd(absolute.frames);
+        }
+    }
+
     m_data_buffer.assign(buffer, buffer + buffer_size);
     m_data_buffer_offset = 0;
     TraceScsiEvent(TRACE_SCSI_RESPONSE, SCSI_CMD_READ_SUBCODE_Q, (u8)m_phase, 0, 0, buffer, buffer_size);
@@ -661,6 +725,12 @@ void ScsiController::CommandReadSubcodeQ()
 
 void ScsiController::CommandReadTOC()
 {
+    if (!m_cdrom_media->IsReady())
+    {
+        StartStatus(SCSI_STATUS_CHECK_CONDITION);
+        return;
+    }
+
     SCSI_DEBUG("******");
     SCSI_DEBUG("SCSI CMD Read TOC");
     SCSI_DEBUG("******");
@@ -743,6 +813,11 @@ void ScsiController::CommandReadTOC()
     }
 }
 
+u32 ScsiController::ReadCycles(u32 cycles)
+{
+    return m_laseractive->IsActive() ? cycles : cycles / m_read_speed;
+}
+
 void ScsiController::LoadSector()
 {
     if (m_data_buffer.empty())
@@ -776,16 +851,22 @@ void ScsiController::LoadSector()
         m_load_sector++;
         m_load_sector &= 0x1FFFFF;
         m_load_sector_count--;
+        m_access_count++;
+
+        if (m_laseractive->IsActive())
+            m_laseractive->NotifyScsiSectorRead(m_load_sector - 1, m_load_sector_count == 0);
 
         if (m_load_sector_count == 0)
             m_next_load_cycles = 0;
         else
-            m_next_load_cycles = m_cdrom_media->SectorTransferCycles();
+            m_next_load_cycles = ReadCycles(m_cdrom_media->SectorTransferCycles());
 
         SCSI_DEBUG("SCSI Sectors left: %d, next:%d, cycles: %d", m_load_sector_count, m_load_sector, m_next_load_cycles);
 
         m_bus_changed = true;
     }
+    else if (m_read_speed > 1 && !m_laseractive->IsActive())
+        m_next_load_cycles = 1;
     else
     {
         Debug("**** SCSI Load sector: buffer not empty *******************");
@@ -872,6 +953,7 @@ void ScsiController::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_data_bus_latch), sizeof(m_data_bus_latch));
     u32 current_sector = m_cdrom_media->GetCurrentSector();
     stream.write(reinterpret_cast<const char*> (&current_sector), sizeof(current_sector));
+    stream.write(reinterpret_cast<const char*> (&m_initial_read_phase_cycles), sizeof(m_initial_read_phase_cycles));
 }
 
 void ScsiController::LoadState(std::istream& stream, int version)
@@ -887,13 +969,17 @@ void ScsiController::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_load_sector), sizeof(m_load_sector));
     stream.read(reinterpret_cast<char*> (&m_load_sector_count), sizeof(m_load_sector_count));
     stream.read(reinterpret_cast<char*> (&m_auto_ack_cycles), sizeof(m_auto_ack_cycles));
-    u32 command_buffer_size;
+    u32 command_buffer_size = 0;
     stream.read(reinterpret_cast<char*> (&command_buffer_size), sizeof(command_buffer_size));
+    if (stream.fail())
+        return;
 
     if (version >= 27)
     {
         u8 command_buffer[k_scsi_command_buffer_capacity] = {};
         stream.read(reinterpret_cast<char*> (command_buffer), sizeof(command_buffer));
+        if (stream.fail())
+            return;
 
         if (command_buffer_size > k_scsi_command_buffer_capacity)
         {
@@ -906,17 +992,30 @@ void ScsiController::LoadState(std::istream& stream, int version)
     }
     else
     {
-        m_command_buffer.resize(command_buffer_size);
-        stream.read(reinterpret_cast<char*> (m_command_buffer.data()), command_buffer_size * sizeof(u8));
+        if (command_buffer_size > k_scsi_command_buffer_capacity)
+        {
+            stream.setstate(ios::failbit);
+            return;
+        }
+
+        u8 command_buffer[k_scsi_command_buffer_capacity] = {};
+        stream.read(reinterpret_cast<char*>(command_buffer), command_buffer_size);
+        if (stream.fail())
+            return;
+        m_command_buffer.assign(command_buffer, command_buffer + command_buffer_size);
     }
 
-    u32 data_buffer_size;
+    u32 data_buffer_size = 0;
     stream.read(reinterpret_cast<char*> (&data_buffer_size), sizeof(data_buffer_size));
+    if (stream.fail())
+        return;
 
     if (version >= 27)
     {
         u8 data_buffer[k_scsi_data_buffer_capacity] = {};
         stream.read(reinterpret_cast<char*> (data_buffer), sizeof(data_buffer));
+        if (stream.fail())
+            return;
 
         if (data_buffer_size > k_scsi_data_buffer_capacity)
         {
@@ -929,16 +1028,36 @@ void ScsiController::LoadState(std::istream& stream, int version)
     }
     else
     {
-        m_data_buffer.resize(data_buffer_size);
-        stream.read(reinterpret_cast<char*> (m_data_buffer.data()), data_buffer_size * sizeof(u8));
+        if (data_buffer_size > k_scsi_data_buffer_capacity)
+        {
+            stream.setstate(ios::failbit);
+            return;
+        }
+
+        u8 data_buffer[k_scsi_data_buffer_capacity] = {};
+        stream.read(reinterpret_cast<char*>(data_buffer), data_buffer_size);
+        if (stream.fail())
+            return;
+        m_data_buffer.assign(data_buffer, data_buffer + data_buffer_size);
     }
 
     stream.read(reinterpret_cast<char*> (&m_data_buffer_offset), sizeof(m_data_buffer_offset));
     stream.read(reinterpret_cast<char*> (&m_bus_changed), sizeof(m_bus_changed));
     stream.read(reinterpret_cast<char*> (&m_previous_signals), sizeof(m_previous_signals));
     stream.read(reinterpret_cast<char*> (&m_data_bus_latch), sizeof(m_data_bus_latch));
-    u32 current_sector;
+    u32 current_sector = 0;
     stream.read(reinterpret_cast<char*> (&current_sector), sizeof(current_sector));
+
+    if (version >= 40)
+    {
+        stream.read(reinterpret_cast<char*> (&m_initial_read_phase_cycles), sizeof(m_initial_read_phase_cycles));
+        m_initial_read_phase_cycles = MIN(m_initial_read_phase_cycles, k_scsi_initial_read_phase_max_cycles);
+    }
+    else
+        m_initial_read_phase_cycles = 0;
+
+    if (stream.fail())
+        return;
 
     u32 max_data_buffer_offset = m_data_buffer.empty() ?
         k_scsi_data_buffer_capacity : (u32)m_data_buffer.size();
@@ -950,5 +1069,4 @@ void ScsiController::LoadState(std::istream& stream, int version)
     }
 
     m_cdrom_media->SetCurrentSector(current_sector);
-    m_initial_read_phase_cycles = 0;
 }

@@ -29,7 +29,9 @@ INCLUDES += -I$(DEPS_DIR)/json
 INCLUDES += -I$(DEPS_DIR)/libchdr/include
 INCLUDES += -I$(DEPS_DIR)/lzma/include
 INCLUDES += -I$(DEPS_DIR)/mINI
+INCLUDES += -I$(DEPS_DIR)/minivorbis
 INCLUDES += -I$(DEPS_DIR)/miniz
+INCLUDES += -I$(DEPS_DIR)/qon
 INCLUDES += -I$(DEPS_DIR)/stb
 INCLUDES += -I$(DEPS_DIR)/zstd
 
@@ -56,6 +58,7 @@ ifeq ($(DEBUG), 1)
     CPPFLAGS += -DDEBUG -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls
 else
     BUILD_CONFIG = Release
+    CXXFLAGS += -fno-rtti
     CPPFLAGS += -DNDEBUG -O3 -flto=auto
     LDFLAGS += -O3 -flto=auto
 endif

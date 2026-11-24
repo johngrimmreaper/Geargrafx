@@ -40,6 +40,9 @@ class Adpcm;
 class ScsiController;
 class Random;
 class TraceLogger;
+class Profiler;
+class LaserActive;
+class LoadDetector;
 
 class GeargrafxCore
 {
@@ -68,7 +71,14 @@ public:
     bool LoadHuCardFromBuffer(const u8* buffer, int size, const char* path = NULL);
     bool LoadBios(const char* file_path, bool syscard);
     bool LoadBiosFromBuffer(const u8* buffer, int size, bool syscard);
+    bool LoadPacBios(const char* file_path, GG_LaserActive_Region region);
+    bool LoadPacBiosFromBuffer(const u8* buffer, int size, GG_LaserActive_Region region);
     void UnloadBios(bool syscard);
+    void UnloadPacBios(GG_LaserActive_Region region);
+    void SetLaserActiveRegion(GG_LaserActive_Region region);
+    bool EjectLaserDisc();
+    bool InsertLaserDisc();
+    bool SelectLaserDiscMedia(u32 index);
     void ResetMedia(bool preserve_ram);
     void KeyPressed(GG_Controllers controller, GG_Keys key);
     void KeyReleased(GG_Controllers controller, GG_Keys key);
@@ -81,6 +91,8 @@ public:
     void SaveMB128(const char* path, bool full_path = false);
     void LoadMB128(const char* path, bool full_path = false);
     void EnableMB128(GG_MB128_Mode mode);
+    void SetPSGRevision(GG_PSG_Revision revision);
+    void SetADPCMClockSpeed(float clock_speed);
     bool SaveState(const char* path = NULL, int index = -1, bool screenshot = false);
     bool SaveState(u8* buffer, size_t& size, bool screenshot = false);
     bool LoadState(const char* path = NULL, int index = -1);
@@ -88,6 +100,12 @@ public:
     bool GetSaveStateHeader(int index, const char* path, GG_SaveState_Header* header);
     bool GetSaveStateScreenshot(int index, const char* path, GG_SaveState_Screenshot* screenshot);
     bool GetRuntimeInfo(GG_Runtime_Info& runtime_info);
+    int GetLineClocks(float* clocks, int max_count);
+    bool UpdateLoadDetection();
+    void ResetLoadDetection();
+    bool SetCheat(const char* cheat);
+    void ClearCheats();
+    static bool IsValidCheat(const char* cheat);
     Memory* GetMemory();
     Media* GetMedia();
     HuC6202* GetHuC6202();
@@ -108,22 +126,29 @@ public:
         GG_TurboLink_Sync_Callback sync_callback, void* user_data);
     void SetTurboLinkCableConnected(bool connected);
     void InvalidateTurboLinkSample();
-    bool IsTurboLinkCableConnected() const;
     u64 GetTurboLinkCycle() const;
     GG_TurboLink_Drive GetTurboLinkDrive() const;
     TraceLogger* GetTraceLogger();
+    Profiler* GetProfiler();
+    LaserActive* GetLaserActive();
 
 private:
     void Reset();
-    template<bool is_cdrom, bool is_sgx>
+    void SelectPSGRevision();
+    void SelectADPCMClockSpeed();
+    template<bool is_cdrom, bool is_sgx, bool is_laseractive>
     bool ClockHardware(u32 cycles);
-    template<bool is_cdrom, bool is_sgx>
+    template<bool is_cdrom, bool is_sgx, bool is_laseractive>
     static void ClockHardwareCallback(void* context, u32 cycles);
-    template<bool debugger, bool is_cdrom, bool is_sgx>
+    template<bool debugger, bool is_cdrom, bool is_sgx, bool is_laseractive = false>
     bool RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug, bool render);
     bool SaveState(std::ostream& stream, size_t& size, bool screenshot);
     bool LoadState(std::istream& stream);
+    bool LoadStateTail(std::istream& stream, u32 version, bool has_mb128_flag, size_t end);
     std::string GetSaveStatePath(const char* path, int index);
+    static int ParseCheat(const char* cheat, GG_Cheat* cheats, int max_cheats);
+    static int ParseCheatCode(const char* code, int length, GG_Cheat* cheats, int max_cheats);
+    static bool IsCheatSeparator(char c);
 
 private:
     Memory* m_memory;
@@ -141,13 +166,21 @@ private:
     Adpcm* m_adpcm;
     ScsiController* m_scsi_controller;
     Random* m_random;
+    LaserActive* m_laseractive;
+    LoadDetector* m_load_detector;
     bool m_paused;
     TraceLogger* m_trace_logger;
+    Profiler* m_profiler;
     u64 m_master_clock_cycles;
     u64 m_turbolink_cycles;
     u64 m_turbolink_next_sync_cycle;
     bool m_frame_ready;
     GG_MB128_Mode m_mb128_mode;
+    GG_PSG_Revision m_requested_psg_revision;
+    GG_PSG_Revision m_psg_revision;
+    float m_requested_adpcm_clock_speed;
+    u8* m_frame_buffer;
+    bool m_frame_rendered;
 };
 
 #include "geargrafx_core_inline.h"

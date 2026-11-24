@@ -29,9 +29,9 @@
 class CdRom;
 class CdRomMedia;
 class CdRomAudio;
-class HuC6280;
 class Random;
 class TraceLogger;
+class LaserActive;
 
 class ScsiController
 {
@@ -116,16 +116,12 @@ public:
         s32* NEXT_LOAD_CYCLES;
         u32* LOAD_SECTOR;
         u32* LOAD_SECTOR_COUNT;
-        s32* AUTO_ACK_CYCLES;
-        std::vector<u8>* COMMAND_BUFFER;
-        std::vector<u8>* DATA_BUFFER;
-        u32* DATA_BUFFER_OFFSET;
     };
 
 public:
-    ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio, Random* random);
+    ScsiController(CdRomMedia* cdrom_media, CdRomAudio* cdrom_audio, Random* random, LaserActive* laseractive);
     ~ScsiController();
-    void Init(HuC6280* huc6280, CdRom* cdrom);
+    void Init(CdRom* cdrom);
     void Reset(bool keep_rst_signal = false);
     void Clock(u32 cycles);
     u8 ReadData();
@@ -139,8 +135,12 @@ public:
     void StartStatus(ScsiStatus status, u8 length = 1);
     void AudioSeekCompleted();
     bool IsDataReady();
+    bool IsBusy();
+    u32 GetAccessCount();
     Scsi_State* GetState();
     void SetTraceLogger(TraceLogger* trace_logger);
+    void SetResetValue(int value);
+    void SetReadSpeed(int speed);
     void SaveState(std::ostream& stream);
     void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
@@ -167,6 +167,7 @@ private:
     void CommandReadSubcodeQ();
     void CommandReadTOC();
     u8 CommandLength(ScsiCommand command);
+    u32 ReadCycles(u32 cycles);
     void LoadSector();
     u32 AudioLBA();
     void TraceScsiEvent(u8 event, u8 command = 0, u8 phase = 0, u8 status = 0,
@@ -179,7 +180,6 @@ private:
 
 private:
     Scsi_State m_state;
-    HuC6280* m_huc6280;
     CdRom* m_cdrom;
     CdRomMedia* m_cdrom_media;
     CdRomAudio* m_cdrom_audio;
@@ -194,12 +194,16 @@ private:
     u32 m_load_sector_count;
     s32 m_auto_ack_cycles;
     u32 m_initial_read_phase_cycles;
+    int m_reset_value;
+    u32 m_read_speed;
+    u32 m_access_count;
     std::vector<u8> m_command_buffer;
     std::vector<u8> m_data_buffer;
     u32 m_data_buffer_offset;
     bool m_bus_changed;
     u16 m_previous_signals;
     u8 m_data_bus_latch;
+    LaserActive* m_laseractive;
 };
 
 static const char* const k_scsi_phase_names[] = {

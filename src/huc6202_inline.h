@@ -59,6 +59,24 @@ INLINE void HuC6202::SetVSyncLow()
         m_huc6270_2->SetVSyncLow();
 }
 
+INLINE bool HuC6202::GetDisplayRange(s32* start, s32* end)
+{
+    bool ret = m_huc6270_1->GetDisplayRange(start, end);
+
+    if (m_is_sgx)
+    {
+        s32 start_2, end_2;
+        if (m_huc6270_2->GetDisplayRange(&start_2, &end_2))
+        {
+            *start = ret ? MIN(*start, start_2) : start_2;
+            *end = ret ? MAX(*end, end_2) : end_2;
+            ret = true;
+        }
+    }
+
+    return ret;
+}
+
 INLINE u8 HuC6202::ReadRegister(u16 address)
 {
     if (m_is_sgx)
@@ -188,11 +206,6 @@ INLINE u16 HuC6202::GetWindow1Width()
 INLINE u16 HuC6202::GetWindow2Width()
 {
     return m_window_2;
-}
-
-INLINE HuC6202::HuC6202_Window_Priority* HuC6202::GetWindowPriorities()
-{
-    return m_window_priority;
 }
 
 INLINE const u8* HuC6202::GetSourceSelection()

@@ -21,15 +21,17 @@
 #include "scsi_controller.h"
 #include "huc6280.h"
 #include "memory.h"
-#include "audio.h"
 #include "trace_logger.h"
+#include "geargrafx_core.h"
+#include "media.h"
+#include "laseractive.h"
 
-CdRom::CdRom(CdRomAudio* cdrom_audio, ScsiController* scsi_controller, Audio* audio, GeargrafxCore* core)
+CdRom::CdRom(CdRomAudio* cdrom_audio, ScsiController* scsi_controller, GeargrafxCore* core, LaserActive* laseractive)
 {
     m_core = core;
     m_cdrom_audio = cdrom_audio;
     m_scsi_controller = scsi_controller;
-    m_audio = audio;
+    m_laseractive = laseractive;
     InitPointer(m_trace_logger);
     InitPointer(m_adpcm);
     InitPointer(m_huc6280);
@@ -70,6 +72,11 @@ void CdRom::Init(HuC6280* huc6280, Memory* memory, Adpcm* adpcm)
 void CdRom::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
+}
+
+void CdRom::NotifyMediaEjected()
+{
+    m_scsi_controller->Reset(true);
 }
 
 void CdRom::LogCdRomEvent(u8 event, u8 value)
@@ -123,6 +130,25 @@ void CdRom::Reset()
 
 u8 CdRom::ReadRegister(u16 address)
 {
+    if (m_laseractive->IsActive())
+    {
+        u16 hardware_address = address & 0x1FFF;
+
+        if (hardware_address > 0x180F)
+        {
+            if ((hardware_address >= 0x18C0) && (hardware_address <= 0x18C3))
+                return m_laseractive->ReadSramControl(hardware_address);
+            if ((hardware_address >= 0x1920) && (hardware_address <= 0x193F))
+                return m_laseractive->ReadRegister((u8)(hardware_address - 0x1920), false);
+            if ((hardware_address >= 0x1940) && (hardware_address <= 0x195F))
+                return m_laseractive->ReadRegister((u8)(hardware_address - 0x1940), true);
+            if (hardware_address >= 0x1960)
+                return 0xFF;
+            if ((hardware_address >= 0x18C4) || (hardware_address <= 0x18BF))
+                address = (u16)(0x1800 | (hardware_address & 0x0F));
+        }
+    }
+
     u16 reg = address & 0x3FF;
     switch (reg)
     {
@@ -204,6 +230,36 @@ u8 CdRom::ReadRegister(u16 address)
 
 void CdRom::WriteRegister(u16 address, u8 value)
 {
+    if (m_laseractive->IsActive())
+    {
+        u16 hardware_address = address & 0x1FFF;
+
+        if (hardware_address > 0x180F)
+        {
+            if (hardware_address == 0x18C0)
+            {
+                m_laseractive->WriteSramControl(value);
+                return;
+            }
+            if ((hardware_address >= 0x18C1) && (hardware_address <= 0x18C3))
+                return;
+            if ((hardware_address >= 0x1920) && (hardware_address <= 0x193F))
+            {
+                m_laseractive->WriteRegister((u8)(hardware_address - 0x1920), false, value);
+                return;
+            }
+            if ((hardware_address >= 0x1940) && (hardware_address <= 0x195F))
+            {
+                m_laseractive->WriteRegister((u8)(hardware_address - 0x1940), true, value);
+                return;
+            }
+            if (hardware_address >= 0x1960)
+                return;
+            if ((hardware_address >= 0x18C4) || (hardware_address <= 0x18BF))
+                address = (u16)(0x1800 | (hardware_address & 0x0F));
+        }
+    }
+
     u16 reg = address & 0x3FF;
     switch (reg)
     {
@@ -309,18 +365,16 @@ void CdRom::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_enabled_irqs), sizeof(m_enabled_irqs));
     stream.read(reinterpret_cast<char*> (&m_cdaudio_sample_toggle), sizeof(m_cdaudio_sample_toggle));
     stream.read(reinterpret_cast<char*> (&m_cdaudio_sample), sizeof(m_cdaudio_sample));
-    if (version >= 27)
-        stream.read(reinterpret_cast<char*> (&m_cdaudio_sample_last_clock), sizeof(m_cdaudio_sample_last_clock));
-    else
+    stream.read(reinterpret_cast<char*> (&m_cdaudio_sample_last_clock), sizeof(m_cdaudio_sample_last_clock));
+    if (version < 27)
         m_cdaudio_sample_last_clock = 0;
 
     stream.read(reinterpret_cast<char*> (&m_fader), sizeof(m_fader));
     stream.read(reinterpret_cast<char*> (&m_fader_enabled), sizeof(m_fader_enabled));
     stream.read(reinterpret_cast<char*> (&m_fader_adpcm), sizeof(m_fader_adpcm));
     stream.read(reinterpret_cast<char*> (&m_fader_fast), sizeof(m_fader_fast));
-    if (version >= 27)
-        stream.read(reinterpret_cast<char*> (&m_fader_start_cycles), sizeof(m_fader_start_cycles));
-    else
+    stream.read(reinterpret_cast<char*> (&m_fader_start_cycles), sizeof(m_fader_start_cycles));
+    if (version < 27)
         m_fader_start_cycles = 0;
 
     stream.read(reinterpret_cast<char*> (&m_fader_cycles), sizeof(m_fader_cycles));

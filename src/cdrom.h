@@ -36,10 +36,10 @@ class CdRomAudio;
 class ScsiController;
 class HuC6280;
 class Memory;
-class Audio;
 class Adpcm;
 class GeargrafxCore;
 class TraceLogger;
+class LaserActive;
 
 class CdRom
 {
@@ -54,7 +54,7 @@ public:
     };
 
 public:
-    CdRom(CdRomAudio* cdrom_audio, ScsiController* scsi_controller, Audio* audio, GeargrafxCore* core);
+    CdRom(CdRomAudio* cdrom_audio, ScsiController* scsi_controller, GeargrafxCore* core, LaserActive* laseractive);
     ~CdRom();
     void Init(HuC6280* huc6280, Memory* memory, Adpcm* adpcm);
     void Reset();
@@ -67,6 +67,7 @@ public:
     double GetFaderValue();
     CdRom_State* GetState();
     void SetTraceLogger(TraceLogger* trace_logger);
+    void NotifyMediaEjected();
     void SaveState(std::ostream& stream);
     void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
@@ -83,7 +84,6 @@ private:
     CdRom_State m_state;
     CdRomAudio* m_cdrom_audio;
     ScsiController* m_scsi_controller;
-    Audio* m_audio;
     Adpcm* m_adpcm;
     HuC6280* m_huc6280;
     Memory* m_memory;
@@ -100,6 +100,7 @@ private:
     bool m_fader_fast;
     u64 m_fader_start_cycles;
     u64 m_fader_cycles;
+    LaserActive* m_laseractive;
 };
 
 static const u8 k_super_cdrom_signature[4] = { 0x00, 0xAA, 0x55, 0x03 };

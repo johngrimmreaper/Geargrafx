@@ -22,10 +22,19 @@
     <ClCompile Include="..\shared\desktop\gui_actions.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_notifications.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_drive_activity.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\desktop\rewind.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\runahead.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\video_recorder.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_debug.cpp">
@@ -70,10 +79,16 @@
     <ClCompile Include="..\shared\desktop\gui_debug_cdrom_audio.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_debug_laseractive.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_debug_adpcm.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_debug_trace_logger.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_debug_profiler.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_debug_turbolink.cpp">
@@ -88,6 +103,9 @@
     <ClCompile Include="..\shared\desktop\gui_popups.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_shader.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_menus.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
@@ -95,6 +113,9 @@
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\gui_hes.cpp">
+      <Filter>desktop</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\desktop\gui_cheats.cpp">
       <Filter>desktop</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\desktop\main.cpp">
@@ -214,6 +235,9 @@
     <ClCompile Include="..\..\src\trace_logger.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\profiler.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\huc6202.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -229,10 +253,31 @@
     <ClCompile Include="..\..\src\cdrom_cuebin_image.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\cdrom_mmi_image.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\media_file_slice.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\mmi_archive.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\laseractive.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\load_detector.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\dependencies\qon\qon.cpp">
+      <Filter>dependencies\qon</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\media_file.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\media_file_native.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ogg_vorbis_decoder.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\cdrom_image.cpp">
@@ -240,6 +285,9 @@
     </ClCompile>
     <ClCompile Include="..\shared\dependencies\miniz\miniz.c">
       <Filter>dependencies\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\dependencies\minivorbis\minivorbis.c">
+      <Filter>dependencies\minivorbis</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\dependencies\lzma\src\CpuArch.c">
       <Filter>dependencies\lzma\src</Filter>
@@ -339,13 +387,25 @@
     <ClInclude Include="..\shared\desktop\gui_actions.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_notifications.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_drive_activity.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\desktop\rewind.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\runahead.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\video_recorder.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_colors.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_constants.h">
@@ -381,8 +441,11 @@
     <ClInclude Include="..\shared\desktop\gui_popups.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_shader.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\ips_patch.h">
-      <Filter>core</Filter>
+      <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_menus.h">
       <Filter>desktop</Filter>
@@ -391,6 +454,9 @@
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_hes.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_cheats.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_memory.h">
@@ -405,6 +471,9 @@
     <ClInclude Include="..\shared\desktop\gui_debug_cdrom_audio.h">
       <Filter>desktop</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_debug_laseractive.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_adpcm.h">
       <Filter>desktop</Filter>
     </ClInclude>
@@ -412,6 +481,9 @@
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_trace_logger.h">
+      <Filter>desktop</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\desktop\gui_debug_profiler.h">
       <Filter>desktop</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\desktop\gui_debug_turbolink.h">
@@ -621,6 +693,9 @@
     <ClInclude Include="..\..\src\trace_logger.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\profiler.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\types.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -648,10 +723,34 @@
     <ClInclude Include="..\..\src\cdrom_cuebin_image.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\cdrom_mmi_image.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\media_file_slice.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\mmi_archive.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\laseractive.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\load_detector.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\dependencies\qon\qon.h">
+      <Filter>dependencies\qon</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\dependencies\qon\qoi2.h">
+      <Filter>dependencies\qon</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\media_file.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\media_file_native.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ogg_vorbis_decoder.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\cdrom_image.h">
@@ -671,6 +770,9 @@
     </ClInclude>
     <ClInclude Include="..\shared\dependencies\miniz\miniz.h">
       <Filter>dependencies\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\dependencies\minivorbis\minivorbis.h">
+      <Filter>dependencies\minivorbis</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\dependencies\lzma\include\CpuArch.h">
       <Filter>dependencies\lzma\include</Filter>
@@ -757,7 +859,6 @@
     <ClInclude Include="..\shared\dependencies\stb\stb_image_write.h">
       <Filter>dependencies\stb</Filter>
     </ClInclude>
-    <ClInclude Include="..\shared\dependencies\imgui\imgui_impl_sdl3.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">
@@ -771,6 +872,12 @@
     </Filter>
     <Filter Include="dependencies\miniz">
       <UniqueIdentifier>{466b2296-06dc-4afd-a898-3c4ed168681e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="dependencies\qon">
+      <UniqueIdentifier>{c189677c-9f75-4f90-872e-6f54d06f9408}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="dependencies\minivorbis">
+      <UniqueIdentifier>{68e69cae-2d2c-4c4f-bfc5-2e01db79d9d8}</UniqueIdentifier>
     </Filter>
     <Filter Include="dependencies\libchdr">
       <UniqueIdentifier>{07f35376-ef00-42d5-8aa3-0b504beb1396}</UniqueIdentifier>
@@ -814,5 +921,6 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Geargrafx.rc" />
+    <ResourceCompile Include="version.rc" />
   </ItemGroup>
 </Project>

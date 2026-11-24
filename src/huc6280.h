@@ -48,6 +48,7 @@ class Memory;
 class HuC6202;
 class Random;
 class TraceLogger;
+class Profiler;
 enum GG_Trace_Type : u8;
 
 typedef void (*GG_Clock_Hardware_Fn)(void* context, u32 master_cycles);
@@ -122,8 +123,10 @@ public:
     void Reset();
     u32 RunInstruction(bool* completed = NULL);
     void SetHardwareClock(GG_Clock_Hardware_Fn clock_fn, void* context);
+    u32 OverclockCycles(u32 master_cycles);
     u32 GetClockedMasterCycles() const;
     void ClockCountedCycles(unsigned int cycles);
+    void ClockPendingCycles();
     void StallFastCycle();
     void ClockTimer(u32 cycles);
     void AssertIRQ1(bool asserted);
@@ -138,6 +141,7 @@ public:
     void DisassembleAhead(int count);
     void DisassembleAhead(u16 start_address, int count, int depth);
     void SetResetValue(int value);
+    void SetOverclock(int percent);
     void EnableBreakpoints(bool enable, bool irqs);
     void SetDebugBRK(bool enable, u8 value, bool trigger_irq);
     bool BreakpointHit();
@@ -161,15 +165,22 @@ public:
     bool HasMemoryBreakpoints(int type, bool read) const;
     bool HasPhysicalMemoryBreakpoints(bool read) const;
     bool HasPhysicalExecuteBreakpoints() const;
+    bool HasMemoryHooks(bool read) const;
+    void CheckCpuAddressHooks(u16 address, bool read);
+    void SetVBlankWatch(bool read, bool write, u16 address);
+    u32 UpdateVBlankWatch();
+    u16 GetVBlankWatchAddress() const;
+    bool GetVBlankWatchAccess(bool read) const;
     const std::vector<GG_Breakpoint>* GetBreakpoints() const;
     void SetDisassemblerSyntax(GG_Disassembler_Syntax syntax);
-    GG_Disassembler_Syntax GetDisassemblerSyntax() const;
     void ClearDisassemblerCallStack();
+    void ResetDebuggerExecutionState();
     std::stack<GG_CallStackEntry>* GetDisassemblerCallStack();
     void CheckMemoryBreakpoints(int type, u32 address, bool read);
     void SetTraceLogger(TraceLogger* trace_logger);
+    void SetProfiler(Profiler* profiler);
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
 
 private:
     typedef void (HuC6280::*opcode_member_ptr) (void);
@@ -197,10 +208,12 @@ private:
     u16 m_transfer_length;
     u16 m_transfer_source;
     u16 m_transfer_dest;
+    u8 m_transfer_opcode;
     Memory* m_memory;
     HuC6202* m_huc6202;
     Random* m_random;
     TraceLogger* m_trace_logger;
+    Profiler* m_profiler;
     HuC6280_State m_processor_state;
     bool m_timer_enabled;
     s32 m_timer_cycles;
@@ -213,10 +226,18 @@ private:
     void* m_clock_hardware_context;
     u32 m_clocked_master_cycles;
     u32 m_extra_master_cycles;
+    u32 m_overclock_ratio;
+    u32 m_overclock_fraction;
     s32 m_debug_next_irq;
     bool m_breakpoints_enabled;
     bool m_breakpoint_cache[HuC6280_BREAKPOINT_TYPE_COUNT][HuC6280_BREAKPOINT_ACCESS_COUNT];
     bool m_physical_breakpoint_cache[HuC6280_BREAKPOINT_ACCESS_COUNT];
+    bool m_memory_hook_cache[HuC6280_BREAKPOINT_ACCESS_COUNT];
+    bool m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_COUNT];
+    u16 m_vblank_watch_address;
+    bool m_vblank_watch_hit;
+    bool m_vblank_watch_armed;
+    u32 m_vblank_watch_misses;
     bool m_breakpoints_irq_enabled;
     bool m_cpu_breakpoint_hit;
     bool m_memory_breakpoint_hit;
@@ -251,19 +272,21 @@ private:
     bool BreakpointHasAccess(const GG_Breakpoint& brk, GG_Breakpoint_Access access) const;
     void SetBreakpointAccess(GG_Breakpoint& brk, GG_Breakpoint_Access access, bool enabled);
     void RefreshBreakpointFlags();
-    void PushCallStack(u16 src, u16 dest, u16 back, u8 bank);
-    void PopCallStack();
+    void RefreshMemoryHooks();
+    void ResetVBlankWatch();
+    void PushCallStack(u16 src, u16 dest, u16 back, u8 bank, bool irq);
+    void PopCallStack(u8 stack_bytes);
+    u32 GetPendingMasterCycles();
+    NO_INLINE void ProfilerEnter(u16 address, bool irq);
 
     u8 Fetch8();
     u16 Fetch16();
     u16 Address16(u8 high, u8 low);
-    bool PageCrossed(u16 old_address, u16 new_address);
     u16 ZeroPageX();
 
     void CreateZNFlagsTable();
     void SetOrClearZNFlags(u8 result);
     void SetZNFlags(u8 result);
-    void SetOverflowFlag(u8 result);
     void SetFlag(u8 flag);
     void ClearFlag(u8 flag);
     bool IsSetFlag(u8 flag);
@@ -279,7 +302,6 @@ private:
     u16 ZeroPageAddressing();
     u16 ZeroPageAddressing(EightBitRegister* reg);
     u16 ZeroPageIndirectAddressing();
-    u16 ZeroPageRelativeAddressing();
     u16 ZeroPageIndexedIndirectAddressing();
     u16 ZeroPageIndirectIndexedAddressing();
     s8 RelativeAddressing();
@@ -343,7 +365,7 @@ private:
     void OPCodes_TIA();
     void OPCodes_TII();
     void OPCodes_TIN();
-    void OPCodes_TransferStart();
+    void OPCodes_TransferStart(u8 opcode);
     void OPCodes_TransferEnd();
 
     void InitOPCodeTable();

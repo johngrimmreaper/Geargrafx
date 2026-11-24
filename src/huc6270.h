@@ -72,6 +72,15 @@ public:
         s32* H_STATE;
     };
 
+    struct HuC6270_Line_Scroll
+    {
+        u32 frame;
+        u16 x;
+        u16 y;
+        u16 start;
+        u16 width;
+    };
+
 public:
     HuC6270(HuC6280* huC6280);
     ~HuC6270();
@@ -80,11 +89,13 @@ public:
     u16 Clock();
     void SetHSyncHigh();
     void SetVSyncLow();
+    bool GetDisplayRange(s32* start, s32* end);
     u8 ReadRegister(u16 address);
     void WriteRegister(u16 address, u8 value);
     HuC6270_State* GetState();
     u16* GetVRAM();
     u16* GetSAT();
+    HuC6270_Line_Scroll* GetLineScroll(u32* frame);
     void SetNoSpriteLimit(bool no_sprite_limit);
     void SetSafeDefaults(bool safe_defaults);
     void SetTraceLogger(TraceLogger* trace_logger);
@@ -118,6 +129,7 @@ private:
     bool m_pending_memory_read;
     bool m_pending_memory_write;
     s32 m_transfer_delay;
+    u32 m_cpu_vram_cycles;
     s32 m_load_bg_start_clock;
     s32 m_load_bg_end_clock;
     s32 m_hsync_start_clock;
@@ -162,6 +174,8 @@ private:
     u16 m_line_buffer[HUC6270_MAX_BACKGROUND_WIDTH] = {};
     u16 m_line_buffer_sprites[HUC6270_MAX_BACKGROUND_WIDTH] = {};
     s32 m_line_buffer_index;
+    HuC6270_Line_Scroll m_line_scroll[HUC6270_LINES_ACTIVE] = {};
+    u32 m_line_scroll_frame;
     bool m_no_sprite_limit;
     bool m_safe_defaults;
     s32 m_sprite_count;
@@ -173,6 +187,10 @@ private:
 private:
     void TraceVdcEvent(u8 event, u8 raw = 0, bool msb = false);
     void LogVdcEvent(u8 event, u8 raw, bool msb);
+    void TraceSpriteBudget();
+    void LogSpriteBudget();
+    void TraceMissedVBlank();
+    void LogMissedVBlank();
     void EndOfLine();
     void LineEvents();
     void HSyncStart();

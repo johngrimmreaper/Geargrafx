@@ -107,6 +107,7 @@ static inline void process(config_Operation operation)
     CONFIG_BOOL("Debug", "CallStack", config_debug.show_call_stack, false);
     CONFIG_BOOL("Debug", "Breakpoints", config_debug.show_breakpoints, false);
     CONFIG_BOOL("Debug", "Symbols", config_debug.show_symbols, false);
+    CONFIG_BOOL("Debug", "Profiler", config_debug.show_profiler, false);
     CONFIG_BOOL("Debug", "HuC6202Info", config_debug.show_huc6202_info, false);
     CONFIG_BOOL("Debug", "HuC6260Info", config_debug.show_huc6260_info, false);
     CONFIG_BOOL("Debug", "HuC6260Palettes", config_debug.show_huc6260_palettes, false);
@@ -124,6 +125,10 @@ static inline void process(config_Operation operation)
     CONFIG_BOOL("Debug", "CDROM", config_debug.show_cdrom, false);
     CONFIG_BOOL("Debug", "CDROMTOC", config_debug.show_cdrom_toc, false);
     CONFIG_BOOL("Debug", "CDROMAudio", config_debug.show_cdrom_audio, false);
+    CONFIG_BOOL("Debug", "LaserActiveGeneral", config_debug.show_laseractive_general, false);
+    CONFIG_BOOL("Debug", "LaserActiveRegisters", config_debug.show_laseractive_registers, false);
+    CONFIG_BOOL("Debug", "LaserActiveAudio", config_debug.show_laseractive_audio, false);
+    CONFIG_BOOL("Debug", "LaserActiveVideo", config_debug.show_laseractive_video, false);
     CONFIG_BOOL("Debug", "ADPCM", config_debug.show_adpcm, false);
     CONFIG_BOOL("Debug", "ArcadeCard", config_debug.show_arcade_card, false);
     CONFIG_BOOL("Debug", "TraceLogger", config_debug.show_trace_logger, false);
@@ -150,7 +155,7 @@ static inline void process(config_Operation operation)
     CONFIG_BOOL("Debug", "TraceVce", config_debug.trace_vce, false);
     CONFIG_BOOL("Debug", "TraceScsi", config_debug.trace_scsi, false);
     CONFIG_BOOL("Debug", "TraceSystem", config_debug.trace_system, false);
-    CONFIG_INT_RANGE("Debug", "TraceVdcEvents", config_debug.trace_vdc_events, TRACE_VDC_FILTER_ALL, 0, TRACE_VDC_FILTER_ALL);
+    CONFIG_INT_RANGE("Debug", "TraceVdcEvents", config_debug.trace_vdc_events, TRACE_VDC_FILTER_DEFAULT, 0, TRACE_VDC_FILTER_ALL);
     CONFIG_INT_RANGE("Debug", "TraceInputEvents", config_debug.trace_input_events, TRACE_INPUT_FILTER_ALL, 0, TRACE_INPUT_FILTER_ALL);
     CONFIG_INT_RANGE("Debug", "TraceTimerEvents", config_debug.trace_timer_events, TRACE_TIMER_FILTER_ALL, 0, TRACE_TIMER_FILTER_ALL);
     CONFIG_INT_RANGE("Debug", "TraceCdromEvents", config_debug.trace_cdrom_events, TRACE_CDROM_FILTER_ALL, 0, TRACE_CDROM_FILTER_ALL);
@@ -159,6 +164,8 @@ static inline void process(config_Operation operation)
     CONFIG_INT_RANGE("Debug", "TraceVceEvents", config_debug.trace_vce_events, TRACE_VCE_FILTER_ALL, 0, TRACE_VCE_FILTER_ALL);
     CONFIG_INT_RANGE("Debug", "TraceScsiEvents", config_debug.trace_scsi_events, TRACE_SCSI_FILTER_ALL, 0, TRACE_SCSI_FILTER_ALL);
     CONFIG_INT_RANGE("Debug", "TraceSystemEvents", config_debug.trace_system_events, TRACE_SYSTEM_FILTER_ALL, 0, TRACE_SYSTEM_FILTER_ALL);
+    CONFIG_INT_RANGE("Debug", "TraceVBlankWatchAddress", config_debug.trace_vblank_watch_address, 0, 0, 0xFFFF);
+    CONFIG_INT_RANGE("Debug", "TraceVBlankWatchOperation", config_debug.trace_vblank_watch_operation, 1, 0, 2);
     CONFIG_INT_RANGE("Debug", "TraceOutput", config_debug.trace_output, 0, 0, 1);
     CONFIG_INT_RANGE("Debug", "TraceCapacity", config_debug.trace_capacity, 0, 0, 4);
     CONFIG_INT_RANGE("Debug", "TraceDiskDirOption", config_debug.trace_disk_dir_option, 0, 0, 2);
@@ -181,8 +188,13 @@ static inline void process(config_Operation operation)
     CONFIG_BOOL("Debug", "PauseOnBRKTriggerIRQ", config_debug.pause_on_brk_trigger_irq, false);
 
     // Interface
+    CONFIG_INT_RANGE("Debug", "FontType", config_debug.font_type, 0, 0, 1);
     CONFIG_INT_RANGE("Debug", "FontSize", config_debug.font_size, 0, 0, 3);
     CONFIG_INT("Debug", "Scale", config_debug.scale, 2);
+    CONFIG_INT("Debug", "Overscan", config_debug.overscan, 0);
+    CONFIG_INT("Debug", "ScanlineMode", config_debug.scanline_mode, 2);
+    CONFIG_INT("Debug", "ScanlineStart", config_debug.scanline_start, 0);
+    CONFIG_INT("Debug", "ScanlineEnd", config_debug.scanline_end, 241);
     CONFIG_BOOL("Debug", "MultiViewport", config_debug.multi_viewport, false);
     CONFIG_BOOL("Debug", "SingleInstance", config_debug.single_instance, false);
     CONFIG_BOOL("Debug", "AutoDebugSettings", config_debug.auto_debug_settings, false);
@@ -219,11 +231,15 @@ static inline void process(config_Operation operation)
     CONFIG_INT_RANGE("Emulator", "Theme", config_emulator.theme, config_Theme_Dark, config_Theme_Light, config_Theme_Dark);
     CONFIG_INT("Emulator", "WindowWidth", config_emulator.window_width, 770);
     CONFIG_INT("Emulator", "WindowHeight", config_emulator.window_height, 600);
-    CONFIG_BOOL("Emulator", "StatusMessages", config_emulator.status_messages, false);
+    CONFIG_BOOL("Emulator", "ShowNotifications", config_emulator.show_notifications, true);
+    CONFIG_INT_RANGE("Emulator", "NotificationDuration", config_emulator.notification_duration, 4, 3, 10);
+    CONFIG_BOOL("Emulator", "ShowCDROMActivity", config_emulator.show_cdrom_activity, true);
     CONFIG_BOOL("Emulator", "AllowScreenSaver", config_emulator.allow_screensaver, false);
 
     // Emulation
     CONFIG_INT("Emulator", "FFWD", config_emulator.ffwd_speed, 1);
+    CONFIG_BOOL("Emulator", "FFWDLoads", config_emulator.ffwd_loads, false);
+    CONFIG_BOOL("Emulator", "FFWDLoadsNotification", config_emulator.ffwd_loads_notification, true);
     CONFIG_INT_RANGE("Emulator", "RunAhead", config_emulator.runahead, 0, 0, 3);
     CONFIG_INT_RANGE("Emulator", "SaveSlot", config_emulator.save_slot, 0, 0, 4);
     CONFIG_BOOL("Emulator", "StartPaused", config_emulator.start_paused, false);
@@ -231,7 +247,11 @@ static inline void process(config_Operation operation)
     CONFIG_BOOL("Emulator", "SoftPatching", config_emulator.softpatching, true);
     CONFIG_BOOL("Emulator", "BackupRAM", config_emulator.backup_ram, true);
     CONFIG_INT("Emulator", "ConsoleType", config_emulator.console_type, 0);
+    CONFIG_INT_RANGE("Emulator", "CPUOverclock", config_emulator.cpu_overclock, 100, 100, 300);
     CONFIG_INT("Emulator", "CDROMType", config_emulator.cdrom_type, 0);
+    CONFIG_INT_RANGE("Emulator", "CDROMSpeed", config_emulator.cdrom_speed, 0, 0, 4);
+    CONFIG_INT_RANGE("Emulator", "LaserActiveRegion", config_emulator.laseractive_region,
+        GG_LASERACTIVE_REGION_AUTO, GG_LASERACTIVE_REGION_AUTO, GG_LASERACTIVE_REGION_US);
     CONFIG_BOOL("Emulator", "PreloadCDROM", config_emulator.preload_cdrom, false);
 
     // Files and paths
@@ -241,15 +261,29 @@ static inline void process(config_Operation operation)
     CONFIG_STRING_NOT_EMPTY("Emulator", "SaveStatesPath", config_emulator.savestates_path, config_root_path);
     CONFIG_INT("Emulator", "ScreenshotDirOption", config_emulator.screenshots_dir_option, 0);
     CONFIG_STRING_NOT_EMPTY("Emulator", "ScreenshotPath", config_emulator.screenshots_path, config_root_path);
+    CONFIG_INT("Emulator", "VideoRecordingDirOption", config_emulator.video_recordings_dir_option, 0);
+    CONFIG_STRING_NOT_EMPTY("Emulator", "VideoRecordingPath", config_emulator.video_recordings_path, config_root_path);
     CONFIG_INT("Emulator", "BackupRAMDirOption", config_emulator.backup_ram_dir_option, 0);
     CONFIG_STRING_NOT_EMPTY("Emulator", "BackupRAMPath", config_emulator.backup_ram_path, config_root_path);
     CONFIG_INT("Emulator", "MB128DirOption", config_emulator.mb128_dir_option, 0);
     CONFIG_STRING_NOT_EMPTY("Emulator", "MB128Path", config_emulator.mb128_path, config_root_path);
     CONFIG_INT("Emulator", "MB128Mode", config_emulator.mb128_mode, 0);
-    CONFIG_STRING("Emulator", "LastOpenPath", config_emulator.last_open_path, "");
     CONFIG_STRING("Emulator", "SysCardBiosPath", config_emulator.syscard_bios_path, "");
     CONFIG_STRING("Emulator", "GameExpressBiosPath", config_emulator.gameexpress_bios_path, "");
+    CONFIG_STRING("Emulator", "PacJapanBiosPath", config_emulator.pac_japan_bios_path, "");
+    CONFIG_STRING("Emulator", "PacUsBiosPath", config_emulator.pac_us_bios_path, "");
     CONFIG_STRING_ARRAY("Emulator", "RecentROM%d", config_emulator.recent_roms, config_max_recent_roms, "");
+
+    // File dialogs
+    CONFIG_STRING("FileDialogs", "ROM", config_file_dialogs.rom, "");
+    CONFIG_STRING("FileDialogs", "RAM", config_file_dialogs.ram, "");
+    CONFIG_STRING("FileDialogs", "States", config_file_dialogs.states, "");
+    CONFIG_STRING("FileDialogs", "Screenshots", config_file_dialogs.screenshots, "");
+    CONFIG_STRING("FileDialogs", "Recordings", config_file_dialogs.recordings, "");
+    CONFIG_STRING("FileDialogs", "Debug", config_file_dialogs.debug, "");
+    CONFIG_STRING("FileDialogs", "BIOS", config_file_dialogs.bios, "");
+    CONFIG_STRING("FileDialogs", "Palettes", config_file_dialogs.palettes, "");
+    CONFIG_STRING("FileDialogs", "Cheats", config_file_dialogs.cheats, "");
 
     // Services
     CONFIG_INT("Emulator", "MCPTCPPort", config_emulator.mcp_tcp_port, 7777);
@@ -272,10 +306,18 @@ static inline void process(config_Operation operation)
     CONFIG_INT_RANGE("Video", "ScaleManual", config_video.scale_manual, 1, 1, 20);
     CONFIG_INT("Video", "AspectRatio", config_video.ratio, 1);
     CONFIG_INT("Video", "Overscan", config_video.overscan, 0);
-    CONFIG_INT("Video", "ScanlineMode", config_video.scanline_mode, 0);
-    CONFIG_INT("Video", "ScanlineStart", config_video.scanline_start, 11);
-    CONFIG_INT("Video", "ScanlineEnd", config_video.scanline_end, 234);
+    CONFIG_INT("Video", "ScanlineMode", config_video.scanline_mode, 1);
+    CONFIG_INT("Video", "ScanlineStart", config_video.scanline_start, 2);
+    CONFIG_INT("Video", "ScanlineEnd", config_video.scanline_end, 241);
+    CONFIG_INT_RANGE("Video", "LaserActiveAspectRatio", config_video.laseractive_ratio, 1, 0, 3);
+    CONFIG_INT_RANGE("Video", "LaserActiveScanlineMode", config_video.laseractive_scanline_mode, 0, 0, 2);
+    CONFIG_INT_RANGE("Video", "LaserActiveScanlineStart", config_video.laseractive_scanline_start, HUC6260_LASERACTIVE_SCANLINE_START, 0, HUC6260_LINES - 1);
+    CONFIG_INT_RANGE("Video", "LaserActiveScanlineEnd", config_video.laseractive_scanline_end, HUC6260_LASERACTIVE_SCANLINE_END, 0, HUC6260_LINES - 1);
+    CONFIG_INT_RANGE("Video", "LaserActiveWidthMode", config_video.laseractive_width_mode, 0, 0, 2);
+    CONFIG_INT_RANGE("Video", "LaserActivePixelStart", config_video.laseractive_pixel_start, HUC6260_LASERACTIVE_PIXEL_START, 0, HUC6260_LASERACTIVE_PIXEL_WIDTH - 1);
+    CONFIG_INT_RANGE("Video", "LaserActivePixelEnd", config_video.laseractive_pixel_end, HUC6260_LASERACTIVE_PIXEL_END, 0, HUC6260_LASERACTIVE_PIXEL_WIDTH - 1);
     CONFIG_INT_RANGE("Video", "Palette", config_video.palette, 0, 0, 3);
+    CONFIG_BOOL("Video", "BlackAndWhite", config_video.black_and_white, true);
     CONFIG_BOOL("Video", "FPS", config_video.fps, false);
     CONFIG_BOOL("Video", "SpriteLimit", config_video.sprite_limit, false);
     CONFIG_BOOL("Video", "SafeVdcDefaults", config_video.safe_vdc_defaults, false);
@@ -292,6 +334,9 @@ static inline void process(config_Operation operation)
     }
 
     CONFIG_INT_RANGE("Video", "SyncMode", config_video.sync_mode, config_VideoSync_Fixed, config_VideoSync_Disabled, config_VideoSync_VRR);
+    CONFIG_INT_RANGE("Video", "RecordingScale", config_video.recording_scale, 2, 1, 20);
+    CONFIG_INT_RANGE("Video", "RecordingAspectRatio", config_video.recording_ratio, 0, 0, 6);
+    CONFIG_INT_RANGE("Video", "RecordingQuality", config_video.recording_quality, 2, 0, 4);
 
     // Background colors
     CONFIG_FLOAT("Video", "BackgroundColorR", config_video.background_color[config_Theme_Dark][0], 0.1f);
@@ -327,7 +372,9 @@ static inline void process(config_Operation operation)
 
     CONFIG_BOOL("Audio", "Enable", config_audio.enable, true);
     CONFIG_BOOL("Audio", "Sync", config_audio.sync, true);
-    CONFIG_BOOL("Audio", "HuC6280A", config_audio.huc6280a, true);
+    CONFIG_INT_RANGE("Audio", "PSGRevision", config_audio.psg_revision, GG_PSG_REVISION_AUTO, GG_PSG_REVISION_AUTO, GG_PSG_REVISION_HUC6280A);
+    CONFIG_INT_RANGE("Audio", "ADPCMClockMode", config_audio.adpcm_clock_mode, 0, 0, 1);
+    CONFIG_FLOAT_RANGE("Audio", "ADPCMClockSpeed", config_audio.adpcm_clock_speed, GG_ADPCM_DEFAULT_CLOCK_SPEED, 32000.0f, 32200.0f);
     CONFIG_FLOAT_RANGE("Audio", "MasterVolume", config_audio.master_volume, 1.0f, 0.0f, 2.0f);
     CONFIG_FLOAT("Audio", "PSGVolume", config_audio.psg_volume, 1.0f);
     CONFIG_FLOAT("Audio", "CDROMVolume", config_audio.cdrom_volume, 1.0f);
@@ -349,7 +396,7 @@ static inline void process(config_Operation operation)
 
     CONFIG_BOOL("Input", "TurboTap", config_input.turbo_tap, false);
     CONFIG_BOOL("Input", "AllowUpDown", config_input.allow_up_down, false);
-    CONFIG_BOOL("Input", "CaptureMouse", config_emulator.capture_mouse, false);
+    CONFIG_BOOL("Input", "AllowSharedGamepads", config_input.allow_shared_gamepads, false);
     CONFIG_INT_RANGE("Input", "MouseSensitivity", config_emulator.mouse_sensitivity, 5, 1, 15);
 
     // Players
@@ -416,7 +463,7 @@ static inline void process(config_Operation operation)
 
             config_Input_Gamepad* primary = &config_input_gamepad[i][profile][0];
             config_Input_Gamepad* secondary = &config_input_gamepad[i][profile][1];
-            CONFIG_INT(gamepad_section, "GamepadDirectional", primary->gamepad_directional, 0);
+            CONFIG_INT_RANGE(gamepad_section, "GamepadDirectional", primary->gamepad_directional, 0, 0, 2);
             CONFIG_BOOL(gamepad_section, "GamepadInvertX", primary->gamepad_invert_x_axis, false);
             CONFIG_BOOL(gamepad_section, "GamepadInvertY", primary->gamepad_invert_y_axis, false);
             CONFIG_INT(gamepad_section, "GamepadX", primary->gamepad_x_axis, SDL_GAMEPAD_AXIS_LEFTX);
@@ -434,18 +481,18 @@ static inline void process(config_Operation operation)
     }
 
     // Hotkeys
-    CONFIG_HOTKEY("OpenROM", config_hotkeys[config_HotkeyIndex_OpenROM], SDL_SCANCODE_O, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("ReloadROM", config_hotkeys[config_HotkeyIndex_ReloadROM], SDL_SCANCODE_D, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("Quit", config_hotkeys[config_HotkeyIndex_Quit], SDL_SCANCODE_Q, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("Reset", config_hotkeys[config_HotkeyIndex_Reset], SDL_SCANCODE_R, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("Pause", config_hotkeys[config_HotkeyIndex_Pause], SDL_SCANCODE_P, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("FFWD", config_hotkeys[config_HotkeyIndex_FFWD], SDL_SCANCODE_F, SDL_KMOD_CTRL);
+    CONFIG_HOTKEY("OpenROM", config_hotkeys[config_HotkeyIndex_OpenROM], SDL_SCANCODE_O, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("ReloadROM", config_hotkeys[config_HotkeyIndex_ReloadROM], SDL_SCANCODE_D, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("Quit", config_hotkeys[config_HotkeyIndex_Quit], SDL_SCANCODE_Q, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("Reset", config_hotkeys[config_HotkeyIndex_Reset], SDL_SCANCODE_R, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("Pause", config_hotkeys[config_HotkeyIndex_Pause], SDL_SCANCODE_P, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("FFWD", config_hotkeys[config_HotkeyIndex_FFWD], SDL_SCANCODE_F, CONFIG_PRIMARY_KMOD);
     CONFIG_HOTKEY("Rewind", config_hotkeys[config_HotkeyIndex_Rewind], SDL_SCANCODE_BACKSPACE, SDL_KMOD_NONE);
-    CONFIG_HOTKEY("SaveState", config_hotkeys[config_HotkeyIndex_SaveState], SDL_SCANCODE_S, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("LoadState", config_hotkeys[config_HotkeyIndex_LoadState], SDL_SCANCODE_L, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("Screenshot", config_hotkeys[config_HotkeyIndex_Screenshot], SDL_SCANCODE_X, SDL_KMOD_CTRL);
+    CONFIG_HOTKEY("SaveState", config_hotkeys[config_HotkeyIndex_SaveState], SDL_SCANCODE_S, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("LoadState", config_hotkeys[config_HotkeyIndex_LoadState], SDL_SCANCODE_L, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("Screenshot", config_hotkeys[config_HotkeyIndex_Screenshot], SDL_SCANCODE_X, CONFIG_PRIMARY_KMOD);
     CONFIG_HOTKEY("Fullscreen", config_hotkeys[config_HotkeyIndex_Fullscreen], SDL_SCANCODE_F12, SDL_KMOD_NONE);
-    CONFIG_HOTKEY("ShowMainMenu", config_hotkeys[config_HotkeyIndex_ShowMainMenu], SDL_SCANCODE_M, SDL_KMOD_CTRL);
+    CONFIG_HOTKEY("ShowMainMenu", config_hotkeys[config_HotkeyIndex_ShowMainMenu], SDL_SCANCODE_M, (SDL_Keymod)(CONFIG_PRIMARY_KMOD | SDL_KMOD_SHIFT));
     CONFIG_HOTKEY("DebugStepInto", config_hotkeys[config_HotkeyIndex_DebugStepInto], SDL_SCANCODE_F11, SDL_KMOD_NONE);
     CONFIG_HOTKEY("DebugStepOver", config_hotkeys[config_HotkeyIndex_DebugStepOver], SDL_SCANCODE_F10, SDL_KMOD_NONE);
     CONFIG_HOTKEY("DebugStepOut", config_hotkeys[config_HotkeyIndex_DebugStepOut], SDL_SCANCODE_F11, SDL_KMOD_SHIFT);
@@ -455,12 +502,14 @@ static inline void process(config_Operation operation)
     CONFIG_HOTKEY("DebugRunToCursor", config_hotkeys[config_HotkeyIndex_DebugRunToCursor], SDL_SCANCODE_F8, SDL_KMOD_NONE);
     CONFIG_HOTKEY("DebugBreakpoint", config_hotkeys[config_HotkeyIndex_DebugBreakpoint], SDL_SCANCODE_F9, SDL_KMOD_NONE);
     CONFIG_HOTKEY("DebugGoBack", config_hotkeys[config_HotkeyIndex_DebugGoBack], SDL_SCANCODE_BACKSPACE, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("SelectSlot1", config_hotkeys[config_HotkeyIndex_SelectSlot1], SDL_SCANCODE_1, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("SelectSlot2", config_hotkeys[config_HotkeyIndex_SelectSlot2], SDL_SCANCODE_2, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("SelectSlot3", config_hotkeys[config_HotkeyIndex_SelectSlot3], SDL_SCANCODE_3, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("SelectSlot4", config_hotkeys[config_HotkeyIndex_SelectSlot4], SDL_SCANCODE_4, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("SelectSlot5", config_hotkeys[config_HotkeyIndex_SelectSlot5], SDL_SCANCODE_5, SDL_KMOD_CTRL);
-    CONFIG_HOTKEY("Mute", config_hotkeys[config_HotkeyIndex_Mute], SDL_SCANCODE_U, SDL_KMOD_CTRL);
+    CONFIG_HOTKEY("SelectSlot1", config_hotkeys[config_HotkeyIndex_SelectSlot1], SDL_SCANCODE_1, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("SelectSlot2", config_hotkeys[config_HotkeyIndex_SelectSlot2], SDL_SCANCODE_2, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("SelectSlot3", config_hotkeys[config_HotkeyIndex_SelectSlot3], SDL_SCANCODE_3, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("SelectSlot4", config_hotkeys[config_HotkeyIndex_SelectSlot4], SDL_SCANCODE_4, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("SelectSlot5", config_hotkeys[config_HotkeyIndex_SelectSlot5], SDL_SCANCODE_5, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("CaptureMouse", config_hotkeys[config_HotkeyIndex_CaptureMouse], SDL_SCANCODE_F1, SDL_KMOD_NONE);
+    CONFIG_HOTKEY("Mute", config_hotkeys[config_HotkeyIndex_Mute], SDL_SCANCODE_U, CONFIG_PRIMARY_KMOD);
+    CONFIG_HOTKEY("VideoRecording", config_hotkeys[config_HotkeyIndex_VideoRecording], SDL_SCANCODE_V, (SDL_Keymod)(CONFIG_PRIMARY_KMOD | SDL_KMOD_SHIFT));
 }
 
 //**************************************
@@ -475,6 +524,7 @@ static void before_defaults(void);
 static void after_defaults(void);
 static void normalize(void);
 static void migrate(int file_version);
+static void migrate_hotkeys(void);
 static void sync_shader_preset_parameter_defaults(void);
 
 static void before_read(int file_version)
@@ -490,8 +540,8 @@ static void after_read(int file_version)
 
 static void before_write(void)
 {
-    config_ini_data["Hotkeys"].remove("CaptureMouseScancode");
-    config_ini_data["Hotkeys"].remove("CaptureMouseMod");
+    config_ini_data["Audio"].remove("HuC6280A");
+    config_ini_data["Input"].remove("CaptureMouse");
 
     for (int i = 0; i < GG_MAX_GAMEPADS; i++)
     {
@@ -533,13 +583,13 @@ static void after_defaults(void)
     config_emulator.paused = false;
     config_emulator.ffwd = false;
     config_emulator.show_info = false;
-    config_hotkeys[config_HotkeyIndex_CaptureMouse].key = SDL_SCANCODE_F1;
-    config_hotkeys[config_HotkeyIndex_CaptureMouse].mod = SDL_KMOD_NONE;
-    config_update_hotkey_string(&config_hotkeys[config_HotkeyIndex_CaptureMouse]);
+    config_emulator.capture_mouse = false;
 }
 
 static void normalize(void)
 {
+    config_video.laseractive_pixel_end = MAX(config_video.laseractive_pixel_end, config_video.laseractive_pixel_start);
+
 #if defined(GG_DISABLE_DISASSEMBLER)
     config_debug.debug = false;
 #endif
@@ -552,6 +602,12 @@ static void normalize(void)
 static void migrate(int file_version)
 {
     std::string stored;
+
+    if (!get_setting("Audio", "PSGRevision", &stored) && (file_version < 9 || get_setting("Audio", "HuC6280A", &stored)))
+    {
+        bool huc6280a = read_bool("Audio", "HuC6280A", true);
+        write_int("Audio", "PSGRevision", huc6280a ? GG_PSG_REVISION_HUC6280A : GG_PSG_REVISION_HUC6280);
+    }
 
     if (file_version < 8)
     {
@@ -656,7 +712,7 @@ static void migrate(int file_version)
             write_bool("Debug", "TraceScsi", false);
         }
 
-        write_int("Debug", "TraceVdcEvents", TRACE_VDC_FILTER_ALL);
+        write_int("Debug", "TraceVdcEvents", TRACE_VDC_FILTER_DEFAULT);
         write_int("Debug", "TraceInputEvents", TRACE_INPUT_FILTER_ALL);
         write_int("Debug", "TraceTimerEvents", TRACE_TIMER_FILTER_ALL);
         write_int("Debug", "TraceCdromEvents", TRACE_CDROM_FILTER_ALL);
@@ -703,18 +759,68 @@ static void migrate(int file_version)
         else if (palette == 2)
             write_int("Video", "Palette", 3);
     }
+
+    if (file_version < 10)
+    {
+        if (get_setting("Emulator", "LastOpenPath", &stored))
+            write_string("FileDialogs", "ROM", stored);
+
+        config_ini_data["Emulator"].remove("LastOpenPath");
+    }
+
+    if (file_version < 11)
+        migrate_hotkeys();
+}
+
+static void migrate_hotkeys(void)
+{
+    struct migrate_Hotkey
+    {
+        const char* name;
+        int key;
+        int mod;
+    };
+
+    static const migrate_Hotkey old_defaults[] =
+    {
+        { "OpenROM", SDL_SCANCODE_O, SDL_KMOD_CTRL }, { "ReloadROM", SDL_SCANCODE_D, SDL_KMOD_CTRL },
+        { "Quit", SDL_SCANCODE_Q, SDL_KMOD_CTRL }, { "Reset", SDL_SCANCODE_R, SDL_KMOD_CTRL },
+        { "Pause", SDL_SCANCODE_P, SDL_KMOD_CTRL }, { "FFWD", SDL_SCANCODE_F, SDL_KMOD_CTRL },
+        { "SaveState", SDL_SCANCODE_S, SDL_KMOD_CTRL }, { "LoadState", SDL_SCANCODE_L, SDL_KMOD_CTRL },
+        { "Screenshot", SDL_SCANCODE_X, SDL_KMOD_CTRL }, { "ShowMainMenu", SDL_SCANCODE_M, SDL_KMOD_CTRL },
+        { "SelectSlot1", SDL_SCANCODE_1, SDL_KMOD_CTRL }, { "SelectSlot2", SDL_SCANCODE_2, SDL_KMOD_CTRL },
+        { "SelectSlot3", SDL_SCANCODE_3, SDL_KMOD_CTRL }, { "SelectSlot4", SDL_SCANCODE_4, SDL_KMOD_CTRL },
+        { "SelectSlot5", SDL_SCANCODE_5, SDL_KMOD_CTRL }, { "Mute", SDL_SCANCODE_U, SDL_KMOD_CTRL },
+        { "VideoRecording", SDL_SCANCODE_R, SDL_KMOD_CTRL | SDL_KMOD_SHIFT }
+    };
+
+    char scancode_key[64];
+    char mod_key[64];
+
+    for (size_t i = 0; i < sizeof(old_defaults) / sizeof(old_defaults[0]); i++)
+    {
+        snprintf(scancode_key, sizeof(scancode_key), "%sScancode", old_defaults[i].name);
+        snprintf(mod_key, sizeof(mod_key), "%sMod", old_defaults[i].name);
+
+        if ((read_int("Hotkeys", scancode_key, old_defaults[i].key) == old_defaults[i].key) &&
+            (read_int("Hotkeys", mod_key, old_defaults[i].mod) == old_defaults[i].mod))
+        {
+            config_ini_data["Hotkeys"].remove(scancode_key);
+            config_ini_data["Hotkeys"].remove(mod_key);
+        }
+    }
 }
 
 static void sync_shader_preset_parameter_defaults(void)
 {
-    ShaderPresetInfo presets[SHADER_PRESET_MAX_DISCOVERED];
-    int preset_count = shader_preset_scan_bundled(presets, SHADER_PRESET_MAX_DISCOVERED);
+    static ShaderPreset preset;
+    int preset_count = shader_preset_get_bundled_count();
 
     for (int i = 0; i < preset_count; i++)
     {
-        ShaderPreset preset;
+        const ShaderPresetInfo* info = shader_preset_get_bundled(i);
         char error[512];
-        if (!shader_preset_load(presets[i].path, &preset, error, sizeof(error)))
+        if (!info || !shader_preset_load(info->path, &preset, error, sizeof(error)))
             continue;
 
         char preset_file[SHADER_PRESET_MAX_PATH];
@@ -722,13 +828,29 @@ static void sync_shader_preset_parameter_defaults(void)
             continue;
 
         std::string section = shader_preset_section_name(preset_file);
+        int variant = preset.default_variant;
+
+        if (preset.variant_count > 0)
+        {
+            if (config_ini_data[section].has("Variant"))
+            {
+                int index = shader_preset_find_variant(&preset, config_ini_data[section]["Variant"].c_str());
+                if (index >= 0)
+                    variant = index;
+            }
+            else
+            {
+                write_string(section.c_str(), "Variant", preset.variants[variant].name);
+            }
+        }
+
         for (int j = 0; j < preset.parameter_count; j++)
         {
             ShaderPresetParameter* parameter = &preset.parameters[j];
             if (config_ini_data[section].has(parameter->name))
                 continue;
 
-            write_float(section.c_str(), parameter->name, parameter->default_value);
+            write_shader_float(section.c_str(), parameter->name, shader_preset_get_variant_value(&preset, variant, j));
         }
     }
 }

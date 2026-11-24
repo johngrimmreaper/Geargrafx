@@ -107,7 +107,6 @@ INLINE void ScsiController::UpdateIRQs()
 
 INLINE u8 ScsiController::ReadData()
 {
-    //Debug("SCSI Read data: %02X %04X %04X", m_bus.db, m_bus.signals, m_huc6280->GetState()->PC->GetValue());
     if (m_phase == SCSI_PHASE_DATA_IN || m_phase == SCSI_PHASE_STATUS || m_phase == SCSI_PHASE_MESSAGE_IN)
         return m_bus.db;
     else
@@ -205,6 +204,16 @@ INLINE void ScsiController::AutoAck()
 INLINE bool ScsiController::IsDataReady()
 {
     return ((m_data_buffer.size() > 0) && (m_data_buffer_offset < m_data_buffer.size()));
+}
+
+INLINE bool ScsiController::IsBusy()
+{
+    return m_load_sector_count > 0;
+}
+
+INLINE u32 ScsiController::GetAccessCount()
+{
+    return m_access_count;
 }
 
 INLINE u8 ScsiController::CommandLength(ScsiCommand command)

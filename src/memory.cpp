@@ -30,8 +30,9 @@
 #include "arcade_card_mapper.h"
 #include "random.h"
 #include "trace_logger.h"
+#include "laseractive.h"
 
-Memory::Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom, Random* random)
+Memory::Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* media, Input* input, Audio* audio, CdRom* cdrom, Random* random, LaserActive* laseractive)
 {
     m_huc6260 = huc6260;
     m_huc6202 = huc6202;
@@ -41,6 +42,7 @@ Memory::Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* medi
     m_audio = audio;
     m_cdrom = cdrom;
     m_random = random;
+    m_laseractive = laseractive;
     InitPointer(m_trace_logger);
     InitPointer(m_disassembler);
     InitPointer(m_test_memory);
@@ -56,6 +58,7 @@ Memory::Memory(HuC6260* huc6260, HuC6202* huc6202, HuC6280* huc6280, Media* medi
     m_card_ram_size = 0;
     m_card_ram_start = 0;
     m_card_ram_end = 0;
+    m_ram_cheat_count = 0;
 }
 
 Memory::~Memory()
@@ -141,7 +144,7 @@ void Memory::Reset()
     else
         m_current_mapper = NULL;
 
-    m_cdrom_ram_size = m_media->IsCDROM() ? 0x10000 : 0;
+    m_cdrom_ram_size = m_media->IsCDROMHardwareEnabled() ? 0x10000 : 0;
 
     for (u32 i = 0; i < m_cdrom_ram_size; i++)
     {
@@ -223,7 +226,7 @@ void Memory::ReloadMemoryMap()
     }
 
     // 0x80 - 0x87
-    if (m_media->IsCDROM())
+    if (m_media->IsCDROMHardwareEnabled())
         for (int i = 0x80; i <= 0x87; i++)
         {
             // CDROM RAM
@@ -249,6 +252,49 @@ void Memory::ReloadMemoryMap()
         else
             m_memory_map[i] = &m_wram[0];
     }
+
+    if (m_media->IsLaserActive())
+    {
+        for (int i = 0x40; i <= 0x7F; i++)
+        {
+            m_memory_map_write[i] = false;
+            m_memory_map[i] = m_unused_memory;
+        }
+        UpdateLaserActiveSram();
+    }
+}
+
+void Memory::UpdateLaserActiveSram()
+{
+    if (!m_media->IsLaserActive())
+        return;
+
+    bool enabled = m_laseractive->IsSramEnabled();
+
+    for (int i = 0x68; i <= 0x7F; i++)
+    {
+        m_memory_map_write[i] = enabled;
+        m_memory_map[i] = enabled ? &m_card_ram[(i - 0x68) * 0x2000] : m_unused_memory;
+    }
+}
+
+bool Memory::CanAddRamCheats(int count)
+{
+    return (m_ram_cheat_count + count) <= GG_MAX_CHEATS;
+}
+
+void Memory::AddRamCheat(const GG_Cheat& cheat)
+{
+    if (m_ram_cheat_count >= GG_MAX_CHEATS)
+        return;
+
+    m_ram_cheats[m_ram_cheat_count] = cheat;
+    m_ram_cheat_count++;
+}
+
+void Memory::ClearRamCheats()
+{
+    m_ram_cheat_count = 0;
 }
 
 void Memory::SetResetValues(int mpr, int wram, int card_ram, int arcade_card)
@@ -360,7 +406,6 @@ GG_Disassembler_Record* Memory::GetOrCreateDisassemblerRecord(u16 address)
     if (!IsValidPointer(record))
     {
         record = new GG_Disassembler_Record();
-        record->address = physical_address;
         record->bank = GetBank(address);
         record->segment[0] = 0;
         record->name[0] = 0;
@@ -388,7 +433,7 @@ GG_Disassembler_Record* Memory::GetOrCreateDisassemblerRecord(u16 address)
 
 Memory::MemoryBankType Memory::GetBankType(u8 bank)
 {
-    if (m_media->IsCDROM() && bank >= 0x80 && bank <= 0x87)
+    if (m_media->IsCDROMHardwareEnabled() && bank >= 0x80 && bank <= 0x87)
         return MEMORY_BANK_TYPE_CDROM_RAM;
 
     if (bank == 0xF7 && m_backup_ram_enabled)
@@ -397,11 +442,18 @@ Memory::MemoryBankType Memory::GetBankType(u8 bank)
     if (bank >= 0xF8 && bank <= 0xFB)
         return MEMORY_BANK_TYPE_WRAM;
 
-    if ((m_card_ram_size > 0) && (bank >= m_card_ram_start) && (bank <= m_card_ram_end))
-        return MEMORY_BANK_TYPE_CARD_RAM;
-
     if (bank < 0x80)
-        return m_media->IsCDROM() ? MEMORY_BANK_TYPE_BIOS : MEMORY_BANK_TYPE_ROM;
+    {
+        bool card_ram = (m_card_ram_size > 0) && (bank >= m_card_ram_start) && (bank <= m_card_ram_end);
+
+        if (!m_media->IsCDROM())
+            return card_ram ? MEMORY_BANK_TYPE_CARD_RAM : MEMORY_BANK_TYPE_ROM;
+
+        if (bank >= 0x40 && m_media->IsLaserActive())
+            return (bank >= 0x68 && m_memory_map_write[bank]) ? MEMORY_BANK_TYPE_CARD_RAM : MEMORY_BANK_TYPE_UNUSED;
+
+        return card_ram ? MEMORY_BANK_TYPE_CARD_RAM : MEMORY_BANK_TYPE_BIOS;
+    }
 
     if (bank == 0xFF)
         return MEMORY_BANK_TYPE_HARDWARE;
@@ -455,11 +507,19 @@ void Memory::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_backup_ram_enabled), sizeof(m_backup_ram_enabled));
     stream.write(reinterpret_cast<const char*> (&m_io_buffer), sizeof(m_io_buffer));
     stream.write(reinterpret_cast<const char*> (&m_mpr_buffer), sizeof(m_mpr_buffer));
+
+    u8 mapper_type = Media::STANDARD_MAPPER;
+    if (m_current_mapper == m_sf2_mapper)
+        mapper_type = Media::SF2_MAPPER;
+    else if (m_current_mapper == m_arcade_card_mapper)
+        mapper_type = Media::ARCADE_CARD_MAPPER;
+    stream.write(reinterpret_cast<const char*> (&mapper_type), sizeof(mapper_type));
+
     if (IsValidPointer(m_current_mapper))
         m_current_mapper->SaveState(stream);
 }
 
-void Memory::LoadState(std::istream& stream)
+void Memory::LoadState(std::istream& stream, int version, size_t end)
 {
     using namespace std;
     stream.read(reinterpret_cast<char*> (m_mpr), sizeof(m_mpr));
@@ -491,7 +551,41 @@ void Memory::LoadState(std::istream& stream)
     stream.read(reinterpret_cast<char*> (&m_backup_ram_enabled), sizeof(m_backup_ram_enabled));
     stream.read(reinterpret_cast<char*> (&m_io_buffer), sizeof(m_io_buffer));
     stream.read(reinterpret_cast<char*> (&m_mpr_buffer), sizeof(m_mpr_buffer));
-    if (IsValidPointer(m_current_mapper))
-        m_current_mapper->LoadState(stream);
+
+    Mapper* saved_mapper = m_current_mapper;
+
+    if (version >= 43)
+    {
+        u8 mapper_type = Media::STANDARD_MAPPER;
+        stream.read(reinterpret_cast<char*> (&mapper_type), sizeof(mapper_type));
+
+        if (mapper_type == Media::SF2_MAPPER)
+            saved_mapper = m_sf2_mapper;
+        else if (mapper_type == Media::ARCADE_CARD_MAPPER)
+            saved_mapper = m_arcade_card_mapper;
+        else
+        {
+            saved_mapper = NULL;
+            if (mapper_type != Media::STANDARD_MAPPER)
+                stream.setstate(ios::failbit);
+        }
+    }
+    else if (m_current_mapper != m_sf2_mapper)
+    {
+        // Older states don't store the mapper, but the Arcade Card RAM is larger than the rest of any state
+        u64 position = static_cast<u64>(stream.tellg());
+        saved_mapper = ((end > position) && ((end - position) >= 0x200000)) ? m_arcade_card_mapper : NULL;
+    }
+
+    if (IsValidPointer(saved_mapper))
+        saved_mapper->LoadState(stream);
+
+    if (saved_mapper != m_current_mapper)
+    {
+        Log("Save state mapper does not match current mapper");
+        if (IsValidPointer(m_current_mapper))
+            m_current_mapper->Reset();
+    }
+
     ReloadMemoryMap();
 }

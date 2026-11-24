@@ -38,7 +38,23 @@ struct GG_Runtime_Info
     int screen_width;
     int screen_height;
     int width_scale;
+    float aspect_ratio;
+    float pixel_aspect_ratio;
     double fps;
+    float pixel_clock;
+    float line_rate;
+    int source_lines;
+    int active_region[4];
+    float chroma_origin;
+    float chroma_texel_cycles;
+    float chroma_line_cycles;
+    float chroma_frame_cycles;
+    u8 border_color[3];
+    bool border_valid;
+    int system_type;
+    int video_mode;
+    bool low_pass;
+    bool black_and_white;
 };
 
 enum GG_Console_Type
@@ -57,11 +73,11 @@ enum GG_CDROM_Type
     GG_CDROM_ARCADE_CARD
 };
 
-struct GG_Color
+enum GG_LaserActive_Region
 {
-    u8 red;
-    u8 green;
-    u8 blue;
+    GG_LASERACTIVE_REGION_AUTO = 0,
+    GG_LASERACTIVE_REGION_JAPAN,
+    GG_LASERACTIVE_REGION_US
 };
 
 enum GG_Pixel_Format
@@ -100,6 +116,13 @@ enum GG_MB128_Mode
     GG_MB128_AUTO = 0,
     GG_MB128_ENABLED,
     GG_MB128_DISABLED
+};
+
+enum GG_PSG_Revision
+{
+    GG_PSG_REVISION_AUTO = 0,
+    GG_PSG_REVISION_HUC6280,
+    GG_PSG_REVISION_HUC6280A
 };
 
 enum GG_Controllers
@@ -151,7 +174,6 @@ enum GG_Disassembler_Syntax
 
 struct GG_Disassembler_Record
 {
-    u32 address;
     u8 bank;
     char name[64];
     char bytes[25];
@@ -170,6 +192,13 @@ struct GG_Disassembler_Record
     int operand_offset;
     int operand_length;
     char auto_symbol[64];
+};
+
+struct GG_Cheat
+{
+    u32 address;
+    s16 compare;
+    u8 value;
 };
 
 #endif /* TYPES_H */

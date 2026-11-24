@@ -24,7 +24,15 @@
 #include <string>
 #include "geargrafx.h"
 
-static const int config_version = 8;
+#if defined(__APPLE__)
+#define CONFIG_PRIMARY_KMOD SDL_KMOD_GUI
+#define CONFIG_PRIMARY_LABEL "Cmd+"
+#else
+#define CONFIG_PRIMARY_KMOD SDL_KMOD_CTRL
+#define CONFIG_PRIMARY_LABEL "Ctrl+"
+#endif
+
+static const int config_version = 11;
 static const int config_minimum_version = 2;
 static const int config_max_recent_roms = 15;
 static const int config_memory_editor_count = 16;
@@ -63,6 +71,8 @@ struct config_Emulator
     bool softpatching;
     bool ffwd;
     int ffwd_speed;
+    bool ffwd_loads;
+    bool ffwd_loads_notification;
     int runahead;
     bool show_info;
     std::string recent_roms[config_max_recent_roms];
@@ -71,6 +81,7 @@ struct config_Emulator
     int savestates_dir_option;
     std::string savestates_path;
     int screenshots_dir_option;
+    int video_recordings_dir_option;
     std::string backup_ram_path;
     int backup_ram_dir_option;
     std::string mb128_path;
@@ -78,15 +89,22 @@ struct config_Emulator
     int mb128_mode;
     std::string syscard_bios_path;
     std::string gameexpress_bios_path;
+    std::string pac_japan_bios_path;
+    std::string pac_us_bios_path;
     std::string screenshots_path;
-    std::string last_open_path;
+    std::string video_recordings_path;
     int window_width;
     int window_height;
-    bool status_messages;
+    bool show_notifications;
+    int notification_duration;
+    bool show_cdrom_activity;
     bool allow_screensaver;
     bool backup_ram;
     int console_type;
+    int cpu_overclock;
     int cdrom_type;
+    int cdrom_speed;
+    int laseractive_region;
     bool preload_cdrom;
     int mcp_tcp_port;
     std::string mcp_http_address;
@@ -94,6 +112,19 @@ struct config_Emulator
     int turbolink_stall_us;
     bool capture_mouse;
     int mouse_sensitivity;
+};
+
+struct config_FileDialogs
+{
+    std::string rom;
+    std::string ram;
+    std::string states;
+    std::string screenshots;
+    std::string recordings;
+    std::string debug;
+    std::string bios;
+    std::string palettes;
+    std::string cheats;
 };
 
 struct config_Video
@@ -105,7 +136,15 @@ struct config_Video
     int scanline_mode;
     int scanline_start;
     int scanline_end;
+    int laseractive_ratio;
+    int laseractive_scanline_mode;
+    int laseractive_scanline_start;
+    int laseractive_scanline_end;
+    int laseractive_width_mode;
+    int laseractive_pixel_start;
+    int laseractive_pixel_end;
     int palette;
+    bool black_and_white;
     bool fps;
     bool sprite_limit;
     bool safe_vdc_defaults;
@@ -118,13 +157,18 @@ struct config_Video
     bool lowpass_speed[3];
     int shader_mode;
     std::string shader_preset_path;
+    int recording_scale;
+    int recording_ratio;
+    int recording_quality;
 };
 
 struct config_Audio
 {
     bool enable;
     bool sync;
-    bool huc6280a;
+    int psg_revision;
+    int adpcm_clock_mode;
+    float adpcm_clock_speed;
     float master_volume;
     float psg_volume;
     float cdrom_volume;
@@ -144,6 +188,7 @@ struct config_Input
 {
     bool turbo_tap;
     bool allow_up_down;
+    bool allow_shared_gamepads;
     int controller_type[GG_MAX_GAMEPADS];
     int avenue_pad_3_button[GG_MAX_GAMEPADS];
     bool turbo_enabled[GG_MAX_GAMEPADS][2];
@@ -227,6 +272,7 @@ enum config_HotkeyIndex
     config_HotkeyIndex_SelectSlot5,
     config_HotkeyIndex_CaptureMouse,
     config_HotkeyIndex_Mute,
+    config_HotkeyIndex_VideoRecording,
     config_HotkeyIndex_COUNT
 };
 
@@ -251,6 +297,7 @@ struct config_Debug
     bool show_call_stack;
     bool show_breakpoints;
     bool show_symbols;
+    bool show_profiler;
     bool show_memory;
     bool show_huc6202_info;
     bool show_huc6260_info;
@@ -269,6 +316,10 @@ struct config_Debug
     bool show_cdrom;
     bool show_cdrom_toc;
     bool show_cdrom_audio;
+    bool show_laseractive_general;
+    bool show_laseractive_registers;
+    bool show_laseractive_audio;
+    bool show_laseractive_video;
     bool show_adpcm;
     bool show_arcade_card;
     bool show_trace_logger;
@@ -302,6 +353,8 @@ struct config_Debug
     int trace_vce_events;
     int trace_scsi_events;
     int trace_system_events;
+    int trace_vblank_watch_address;
+    int trace_vblank_watch_operation;
     int trace_output;
     int trace_capacity;
     int trace_disk_dir_option;
@@ -320,8 +373,13 @@ struct config_Debug
     bool pause_on_brk;
     int pause_on_brk_value;
     bool pause_on_brk_trigger_irq;
+    int font_type;
     int font_size;
     int scale;
+    int overscan;
+    int scanline_mode;
+    int scanline_start;
+    int scanline_end;
     bool multi_viewport;
     bool single_instance;
     bool auto_debug_settings;
@@ -339,6 +397,7 @@ struct config_Debug
 };
 
 EXTERN config_Emulator config_emulator;
+EXTERN config_FileDialogs config_file_dialogs;
 EXTERN config_Video config_video;
 EXTERN config_Audio config_audio;
 EXTERN config_Rewind config_rewind;

@@ -48,20 +48,9 @@ void gui_debug_cdrom_audio_destroy(void)
     SafeDeleteArray(wave_buffer_right);
 }
 
-void gui_debug_window_cdrom_audio(void)
+void gui_debug_cdrom_audio_output(CdRomAudio* cdrom_audio, const char* mute_tooltip)
 {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::SetNextWindowPos(ImVec2(120, 100), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(262, 464), ImGuiCond_FirstUseEver);
-    ImGui::Begin("CD-ROM Audio", &config_debug.show_cdrom_audio);
-
-    ImGui::PushFont(gui_default_font);
-
-    GeargrafxCore* core = emu_get_core();
-    CdRom* cdrom = core->GetCDROM();
-    CdRomMedia* cdrom_media = core->GetCDROMMedia();
-    CdRomAudio* cdrom_audio = core->GetCDROMAudio();
-    CdRomAudio::CdRomAudio_State* cdrom_audio_state = cdrom_audio->GetState();
+    CdRomAudio::CdRomAudio_State* cdrom_audio_state = cdrom_audio ? cdrom_audio->GetState() : NULL;
 
     if (ImGui::BeginTable("##table", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX))
     {
@@ -79,14 +68,14 @@ void gui_debug_window_cdrom_audio(void)
         }
         ImGui::PopStyleColor();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Mute CD Audio");
+            ImGui::SetTooltip("%s", mute_tooltip);
         ImGui::PopFont();
 
         ImGui::TableNextColumn();
 
         ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(1, 1));
 
-        int data_size = (*cdrom_audio_state->FRAME_SAMPLES) / 2;
+        int data_size = cdrom_audio_state ? CLAMP(*cdrom_audio_state->FRAME_SAMPLES, 0, GG_AUDIO_BUFFER_SIZE) / 2 : 0;
         int trigger_left = 0;
         int trigger_right = 0;
 
@@ -116,30 +105,32 @@ void gui_debug_window_cdrom_audio(void)
 
         int half_window_size = 100;
         int x_min_left = MAX(0, trigger_left - half_window_size);
-        int x_max_left = MIN(data_size, trigger_left + half_window_size);
+        int x_max_left = MAX(x_min_left + 1, MIN(data_size, trigger_left + half_window_size));
 
         ImPlotAxisFlags flags = ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickLabels | ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_Lock | ImPlotAxisFlags_NoTickMarks;
+
+        ImPlotSpec spec;
+        spec.LineColor = white;
+        spec.LineWeight = 1.0f;
 
         if (ImPlot::BeginPlot("Left Channel", ImVec2(100, 50), ImPlotFlags_CanvasOnly))
         {
             ImPlot::SetupAxes("x", "y", flags, flags);
             ImPlot::SetupAxesLimits(x_min_left, x_max_left, -1.0f, 1.0f, ImPlotCond_Always);
-            ImPlot::SetNextLineStyle(white, 1.0f);
-            ImPlot::PlotLine("L", wave_buffer_left, data_size);
+            ImPlot::PlotLine("L", wave_buffer_left, data_size, 1.0, 0.0, spec);
             ImPlot::EndPlot();
         }
 
         ImGui::SameLine();
 
         int x_min_right = MAX(0, trigger_right - half_window_size);
-        int x_max_right = MIN(data_size, trigger_right + half_window_size);
+        int x_max_right = MAX(x_min_right + 1, MIN(data_size, trigger_right + half_window_size));
 
         if (ImPlot::BeginPlot("Right Channel", ImVec2(100, 50), ImPlotFlags_CanvasOnly))
         {
             ImPlot::SetupAxes("x", "y", flags, flags);
             ImPlot::SetupAxesLimits(x_min_right, x_max_right, -1.0f, 1.0f, ImPlotCond_Always);
-            ImPlot::SetNextLineStyle(white, 1.0f);
-            ImPlot::PlotLine("R", wave_buffer_right, data_size);
+            ImPlot::PlotLine("R", wave_buffer_right, data_size, 1.0, 0.0, spec);
             ImPlot::EndPlot();
         }
 
@@ -147,6 +138,24 @@ void gui_debug_window_cdrom_audio(void)
 
         ImGui::EndTable();
     }
+}
+
+void gui_debug_window_cdrom_audio(void)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::SetNextWindowPos(ImVec2(120, 100), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(262, 464), ImGuiCond_FirstUseEver);
+    ImGui::Begin("CD-ROM Audio", &config_debug.show_cdrom_audio);
+
+    ImGui::PushFont(gui_default_font);
+
+    GeargrafxCore* core = emu_get_core();
+    CdRom* cdrom = core->GetCDROM();
+    CdRomMedia* cdrom_media = core->GetCDROMMedia();
+    CdRomAudio* cdrom_audio = core->GetCDROMAudio();
+    CdRomAudio::CdRomAudio_State* cdrom_audio_state = cdrom_audio->GetState();
+
+    gui_debug_cdrom_audio_output(cdrom_audio, "Mute CD Audio");
 
     u32 current_lba = *cdrom_audio_state->CURRENT_LBA;
     s32 current_track = cdrom_media->FindTrackFromLBA(current_lba, true);
@@ -159,7 +168,7 @@ void gui_debug_window_cdrom_audio(void)
     bool audio_sector = IsValidPointer(track) && (track->type == GG_CDROM_AUDIO_TRACK) &&
         (current_lba >= track->start_lba);
     const char* output_state = "SILENT";
-    const GuiDebugColor* output_color = &gray;
+    const GuiColor* output_color = &gray;
 
     if (*cdrom_audio_state->CURRENT_STATE == CdRomAudio::CD_AUDIO_STATE_PLAYING)
     {
