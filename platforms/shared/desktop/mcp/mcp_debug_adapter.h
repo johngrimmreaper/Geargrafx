@@ -37,22 +37,6 @@ struct MemoryAreaInfo
     u8* data;
 };
 
-struct RegistersSnapshot
-{
-    u16 PC;
-    u8 A;
-    u8 X;
-    u8 Y;
-    u8 S;
-    u8 P;
-    s32 SPEED;
-    bool TIMER;
-    u8 TIMER_COUNTER;
-    u8 TIMER_RELOAD;
-    u8 IDR;
-    u8 IRR;
-};
-
 struct BreakpointInfo
 {
     bool enabled;
@@ -110,7 +94,6 @@ public:
     std::vector<BreakpointInfo> ListBreakpoints();
 
     // Registers
-    RegistersSnapshot GetRegisters();
     void SetRegister(const std::string& name, u32 value);
 
     // Memory areas (matching debugger memory editor)
@@ -135,16 +118,23 @@ public:
     json GetCDROMAudioStatus();
     json GetADPCMStatus();
     json GetScreenshot();
+    json StartVideoRecording(const std::string& file_path, int scale, const std::string& aspect_ratio, const std::string& quality);
+    json StopVideoRecording();
     json ListSprites(int vdc);
     json GetSpriteImage(int sprite_index, int vdc);
 
     // Media and state management
     json GetMediaInfo();
     json ListRecentMedia();
+    json ListMmiMedia();
+    json EjectMmiMedia();
+    json InsertMmiMedia();
+    json SelectMmiMedia(u32 index);
     json StartLoadMedia(const std::string& file_path);
     bool IsMediaLoading() const;
     json FinishLoadMedia(const std::string& file_path);
     json LoadBios(const std::string& file_path, bool syscard);
+    json LoadPacBios(const std::string& file_path, GG_LaserActive_Region region);
     json ListSaveStateSlots();
     json SelectSaveStateSlot(int slot);
     json SaveState();
@@ -193,14 +183,19 @@ public:
     json GetTraceLog(s64 start, int count);
     json SetTraceLog(bool enabled, u32 flags, const std::string& output,
         const std::string& memory_size, const std::string& disk_size,
-        const std::string& output_path, const u32* event_filters);
+        const std::string& output_path, const u32* event_filters,
+        const std::string& vblank_watch_address, const std::string& vblank_watch_operation);
+    json SetProfiler(const std::string& action);
+    json GetProfilerData(const std::string& sort, int count, const std::string& filter);
 
     // Rewind
     json GetRewindStatus();
     json RewindSeek(int snapshot);
 
-    // Core access
-    GeargrafxCore* GetCore() { return m_core; }
+    // Cheats
+    json ListCheats();
+    json AddCheat(const std::string& code, const std::string& description);
+    json RemoveCheat(int index);
 
 private:
     GeargrafxCore* m_core;

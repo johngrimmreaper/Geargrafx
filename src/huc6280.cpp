@@ -26,14 +26,18 @@
 #include "memory.h"
 #include "random.h"
 #include "trace_logger.h"
+#include "profiler.h"
 
 HuC6280::HuC6280(Random* random)
 {
     m_random = random;
     InitOPCodeTable();
     InitPointer(m_trace_logger);
+    InitPointer(m_profiler);
     InitPointer(m_clock_hardware_fn);
     InitPointer(m_clock_hardware_context);
+    m_overclock_ratio = 0;
+    m_overclock_fraction = 0;
     m_breakpoints_enabled = false;
     m_breakpoints_irq_enabled = false;
     m_cpu_breakpoint_hit = false;
@@ -61,6 +65,10 @@ HuC6280::HuC6280(Random* random)
     m_processor_state.TIMER_RELOAD = &m_timer_reload;
     m_processor_state.IDR = &m_interrupt_disable_register;
     m_processor_state.IRR = &m_interrupt_request_register;
+    for (int i = 0; i < HuC6280_BREAKPOINT_ACCESS_COUNT; i++)
+        m_vblank_watch[i] = false;
+    m_vblank_watch_address = 0;
+    ResetVBlankWatch();
     RefreshBreakpointFlags();
 }
 
@@ -78,6 +86,21 @@ void HuC6280::Init(Memory* memory, HuC6202* huc6202)
 void HuC6280::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
+}
+
+void HuC6280::SetProfiler(Profiler* profiler)
+{
+    m_profiler = profiler;
+}
+
+void HuC6280::ProfilerEnter(u16 address, bool irq)
+{
+#if !defined(GG_DISABLE_DISASSEMBLER)
+    m_profiler->Enter(m_memory->GetPhysicalAddress(address), address, m_memory->GetBank(address), m_S.GetValue(), irq, GetPendingMasterCycles());
+#else
+    UNUSED(address);
+    UNUSED(irq);
+#endif
 }
 
 void HuC6280::LogCpuEvent()
@@ -224,6 +247,7 @@ void HuC6280::Reset()
     m_transfer_length = 0;
     m_transfer_source = 0;
     m_transfer_dest = 0;
+    m_transfer_opcode = 0;
     m_timer_cycles = 0;
     m_timer_enabled = false;
     m_timer_counter = 0;
@@ -233,6 +257,7 @@ void HuC6280::Reset()
     m_transfer_flag = false;
     m_clocked_master_cycles = 0;
     m_extra_master_cycles = 0;
+    m_overclock_fraction = 0;
     m_cpu_breakpoint_hit = false;
     m_memory_breakpoint_hit = false;
     m_debug_brk_breakpoint_hit = false;
@@ -245,6 +270,7 @@ void HuC6280::Reset()
     m_debug_brk_trigger_irq = false;
     m_prev_opcode_address = 0xFFFF;
     ClearDisassemblerCallStack();
+    ResetVBlankWatch();
 }
 
 HuC6280::HuC6280_State* HuC6280::GetState()
@@ -257,6 +283,12 @@ void HuC6280::SetResetValue(int value)
     m_reset_value = value;
 }
 
+void HuC6280::SetOverclock(int percent)
+{
+    percent = CLAMP(percent, 100, 300);
+    m_overclock_ratio = (percent > 100) ? (u32)((100 << 16) / percent) : 0;
+}
+
 void HuC6280::SetDisassemblerSyntax(GG_Disassembler_Syntax syntax)
 {
     if (syntax < GG_Disassembler_Syntax_Geargrafx || syntax >= GG_Disassembler_Syntax_Count)
@@ -265,15 +297,11 @@ void HuC6280::SetDisassemblerSyntax(GG_Disassembler_Syntax syntax)
     m_disassembler_syntax = syntax;
 }
 
-GG_Disassembler_Syntax HuC6280::GetDisassemblerSyntax() const
-{
-    return m_disassembler_syntax;
-}
-
 void HuC6280::EnableBreakpoints(bool enable, bool irqs)
 {
     m_breakpoints_enabled = enable;
     m_breakpoints_irq_enabled = irqs;
+    RefreshMemoryHooks();
 }
 
 void HuC6280::ResetBreakpoints()
@@ -416,6 +444,17 @@ void HuC6280::RefreshBreakpointFlags()
         m_breakpoint_cache[HuC6280_BREAKPOINT_TYPE_ROM][HuC6280_BREAKPOINT_ACCESS_EXECUTE] ||
         m_breakpoint_cache[HuC6280_BREAKPOINT_TYPE_CARD_RAM][HuC6280_BREAKPOINT_ACCESS_EXECUTE] ||
         m_breakpoint_cache[HuC6280_BREAKPOINT_TYPE_CDROM_RAM][HuC6280_BREAKPOINT_ACCESS_EXECUTE];
+
+    RefreshMemoryHooks();
+}
+
+void HuC6280::RefreshMemoryHooks()
+{
+    for (int i = 0; i < HuC6280_BREAKPOINT_ACCESS_COUNT; i++)
+    {
+        m_memory_hook_cache[i] = m_vblank_watch[i] || (m_breakpoints_enabled &&
+            (m_breakpoint_cache[HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS][i] || m_physical_breakpoint_cache[i]));
+    }
 }
 
 bool HuC6280::BreakpointAccessSupported(int type, GG_Breakpoint_Access access) const
@@ -793,10 +832,61 @@ void HuC6280::SetBreakpoints(const std::vector<GG_Breakpoint>& breakpoints)
     RefreshBreakpointFlags();
 }
 
+void HuC6280::SetVBlankWatch(bool read, bool write, u16 address)
+{
+    if ((m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_READ] == read) &&
+        (m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_WRITE] == write) &&
+        (m_vblank_watch_address == address))
+        return;
+
+    m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_READ] = read;
+    m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_WRITE] = write;
+    m_vblank_watch_address = address;
+    ResetVBlankWatch();
+    RefreshMemoryHooks();
+}
+
+u32 HuC6280::UpdateVBlankWatch()
+{
+    if (!m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_READ] && !m_vblank_watch[HuC6280_BREAKPOINT_ACCESS_WRITE])
+        return 0;
+
+    bool missed = m_vblank_watch_armed && !m_vblank_watch_hit;
+    m_vblank_watch_armed = true;
+    m_vblank_watch_hit = false;
+    m_vblank_watch_misses = missed ? m_vblank_watch_misses + 1 : 0;
+
+    return m_vblank_watch_misses;
+}
+
+void HuC6280::ResetVBlankWatch()
+{
+    m_vblank_watch_hit = false;
+    m_vblank_watch_armed = false;
+    m_vblank_watch_misses = 0;
+}
+
 void HuC6280::ClearDisassemblerCallStack()
 {
     while(!m_disassembler_call_stack.empty())
         m_disassembler_call_stack.pop();
+}
+
+void HuC6280::ResetDebuggerExecutionState()
+{
+    ClearDisassemblerCallStack();
+    m_run_to_breakpoint_requested = false;
+    m_run_to_breakpoint.enabled = false;
+    m_run_to_breakpoint_hit = false;
+    m_cpu_breakpoint_hit = false;
+    m_memory_breakpoint_hit = false;
+    m_debug_brk_breakpoint_hit = false;
+    m_breakpoint_hit_address_valid = false;
+    m_breakpoint_hit_address = 0xFFFF;
+    m_prev_opcode_address = 0xFFFF;
+
+    if (IsValidPointer(m_profiler))
+        m_profiler->ResetStack();
 }
 
 void HuC6280::CheckMemoryBreakpoints(int type, u32 address, bool read)
@@ -885,9 +975,12 @@ void HuC6280::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_interrupt_request_register), sizeof(m_interrupt_request_register));
     stream.write(reinterpret_cast<const char*> (&m_transfer_flag), sizeof(m_transfer_flag));
     stream.write(reinterpret_cast<const char*> (&m_debug_next_irq), sizeof(m_debug_next_irq));
+    stream.write(reinterpret_cast<const char*> (&m_transfer_opcode), sizeof(m_transfer_opcode));
+
+    m_overclock_fraction = 0;
 }
 
-void HuC6280::LoadState(std::istream& stream)
+void HuC6280::LoadState(std::istream& stream, int version)
 {
     m_PC.LoadState(stream);
     m_A.LoadState(stream);
@@ -913,4 +1006,16 @@ void HuC6280::LoadState(std::istream& stream)
     stream.read(reinterpret_cast<char*> (&m_interrupt_request_register), sizeof(m_interrupt_request_register));
     stream.read(reinterpret_cast<char*> (&m_transfer_flag), sizeof(m_transfer_flag));
     stream.read(reinterpret_cast<char*> (&m_debug_next_irq), sizeof(m_debug_next_irq));
+
+    if (version >= 45)
+        stream.read(reinterpret_cast<char*> (&m_transfer_opcode), sizeof(m_transfer_opcode));
+    else
+    {
+        m_transfer_opcode = 0;
+        if (m_transfer_state != 0)
+            m_memory->TryPeek(m_PC.GetValue(), &m_transfer_opcode);
+    }
+
+    m_overclock_fraction = 0;
+    ResetVBlankWatch();
 }

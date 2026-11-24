@@ -101,12 +101,15 @@ void gui_debug_window_adpcm(void)
 
         ImPlotAxisFlags flags = ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickLabels | ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_Lock | ImPlotAxisFlags_NoTickMarks;
 
+        ImPlotSpec spec;
+        spec.LineColor = white;
+        spec.LineWeight = 1.0f;
+
         if (ImPlot::BeginPlot("Left Channel", ImVec2(160, 80), ImPlotFlags_CanvasOnly))
         {
             ImPlot::SetupAxes("x", "y", flags, flags);
             ImPlot::SetupAxesLimits(x_min_left, x_max_left, -1.0f, 1.0f, ImPlotCond_Always);
-            ImPlot::SetNextLineStyle(white, 1.0f);
-            ImPlot::PlotLine("L", adpcm_wave_buffer, data_size);
+            ImPlot::PlotLine("L", adpcm_wave_buffer, data_size, 1.0, 0.0, spec);
             ImPlot::EndPlot();
         }
 
@@ -129,7 +132,7 @@ void gui_debug_window_adpcm(void)
     ImGui::TextColored(violet, "LENGTH"); ImGui::SameLine();
     ImGui::TextColored(white, "%d", *adpcm_state->LENGTH);
 
-    float frequency = (32000.0f / (16.0f - (float)*adpcm_state->SAMPLE_RATE)) / 1000.0f;
+    float frequency = (float)((emu_get_core()->GetAdpcm()->GetClockSpeed() / (16 - (*adpcm_state->SAMPLE_RATE & 0x0F))) / 1000.0);
     ImGui::TextColored(violet, "FREQUENCY"); ImGui::SameLine();
     ImGui::TextColored(white, "%.2f KHz", frequency);
 

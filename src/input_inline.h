@@ -26,13 +26,14 @@
 
 INLINE void Input::KeyPressed(GG_Controllers controller, GG_Keys key)
 {
+    if ((m_gamepads[controller] & key) != 0)
+        m_activity_count++;
+
     m_gamepads[controller] &= ~key;
 
     if (m_controller_type[controller] == GG_CONTROLLER_AVENUE_PAD_3)
     {
-        GG_Keys iii_button = m_avenue_pad_3_button[controller];
-        if (iii_button == GG_KEY_NONE)
-            iii_button = m_media->GetAvenuePad3Button();
+        GG_Keys iii_button = GetAvenuePad3Button(controller);
 
         if ((key == iii_button) || (key == GG_KEY_III))
         {
@@ -44,13 +45,14 @@ INLINE void Input::KeyPressed(GG_Controllers controller, GG_Keys key)
 
 INLINE void Input::KeyReleased(GG_Controllers controller, GG_Keys key)
 {
+    if ((m_gamepads[controller] & key) != key)
+        m_activity_count++;
+
     m_gamepads[controller] |= key;
 
     if (m_controller_type[controller] == GG_CONTROLLER_AVENUE_PAD_3)
     {
-        GG_Keys iii_button = m_avenue_pad_3_button[controller];
-        if (iii_button == GG_KEY_NONE)
-            iii_button = m_media->GetAvenuePad3Button();
+        GG_Keys iii_button = GetAvenuePad3Button(controller);
 
         if ((key == iii_button) || (key == GG_KEY_III))
         {
@@ -405,10 +407,24 @@ INLINE void Input::SetAvenuePad3Button(GG_Controllers controller, GG_Keys button
     m_avenue_pad_3_button[controller] = button;
 }
 
+INLINE GG_Keys Input::GetAvenuePad3Button(GG_Controllers controller)
+{
+    GG_Keys button = m_avenue_pad_3_button[controller];
+    return button == GG_KEY_NONE ? m_media->GetAvenuePad3Button() : button;
+}
+
 INLINE void Input::SetMouseDelta(s32 x, s32 y)
 {
+    if ((x != 0) || (y != 0))
+        m_activity_count++;
+
     m_mouse_x += x;
     m_mouse_y += y;
+}
+
+INLINE u32 Input::GetActivityCount() const
+{
+    return m_activity_count;
 }
 
 INLINE void Input::EnableMB128(bool enable)

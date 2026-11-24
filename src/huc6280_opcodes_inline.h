@@ -191,7 +191,7 @@ INLINE void HuC6280::OPCodes_BRK()
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
     u16 dest = m_PC.GetValue();
-    PushCallStack(pc - 1, dest, pc + 1, m_memory->GetBank(dest));
+    PushCallStack(pc - 1, dest, pc + 1, m_memory->GetBank(dest), false);
 #endif
 }
 
@@ -205,7 +205,7 @@ INLINE void HuC6280::OPCodes_Subroutine()
     m_PC.SetValue(dest);
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
-    PushCallStack(pc - 1, dest, pc, m_memory->GetBank(dest));
+    PushCallStack(pc - 1, dest, pc, m_memory->GetBank(dest), false);
 #endif
 
 }
@@ -518,23 +518,22 @@ INLINE void HuC6280::OPCodes_TAI()
 {
     if (m_transfer_state == 0)
     {
-        OPCodes_TransferStart();
+        OPCodes_TransferStart(0xF3);
         return;
     }
 
     if (m_transfer_state == 2)
     {
+        m_cycles += 6;
         m_memory->Write(m_transfer_dest, m_memory->Read(m_transfer_source, true), true);
         m_transfer_source += (m_transfer_count & 1) ? -1 : 1;
         m_transfer_dest++;
         m_transfer_count++;
         m_transfer_length--;
-        m_cycles += 6;
 
         if (m_transfer_length == 0)
             m_transfer_state = 1;
 
-        m_PC.Decrement();
         return;
     }
 
@@ -549,22 +548,21 @@ INLINE void HuC6280::OPCodes_TDD()
 {
     if (m_transfer_state == 0)
     {
-        OPCodes_TransferStart();
+        OPCodes_TransferStart(0xC3);
         return;
     }
 
     if (m_transfer_state == 2)
     {
+        m_cycles += 6;
         m_memory->Write(m_transfer_dest, m_memory->Read(m_transfer_source, true), true);
         m_transfer_source--;
         m_transfer_dest--;
         m_transfer_length--;
-        m_cycles += 6;
 
         if (m_transfer_length == 0)
             m_transfer_state = 1;
 
-        m_PC.Decrement();
         return;
     }
 
@@ -579,23 +577,22 @@ INLINE void HuC6280::OPCodes_TIA()
 {
     if (m_transfer_state == 0)
     {
-        OPCodes_TransferStart();
+        OPCodes_TransferStart(0xE3);
         return;
     }
 
     if (m_transfer_state == 2)
     {
+        m_cycles += 6;
         m_memory->Write(m_transfer_dest, m_memory->Read(m_transfer_source, true), true);
         m_transfer_source++;
         m_transfer_dest += (m_transfer_count & 1) ? -1 : 1;
         m_transfer_count++;
         m_transfer_length--;
-        m_cycles += 6;
 
         if (m_transfer_length == 0)
             m_transfer_state = 1;
 
-        m_PC.Decrement();
         return;
     }
 
@@ -610,22 +607,21 @@ INLINE void HuC6280::OPCodes_TII()
 {
     if (m_transfer_state == 0)
     {
-        OPCodes_TransferStart();
+        OPCodes_TransferStart(0x73);
         return;
     }
 
     if (m_transfer_state == 2)
     {
+        m_cycles += 6;
         m_memory->Write(m_transfer_dest, m_memory->Read(m_transfer_source, true), true);
         m_transfer_source++;
         m_transfer_dest++;
         m_transfer_length--;
-        m_cycles += 6;
 
         if (m_transfer_length == 0)
             m_transfer_state = 1;
 
-        m_PC.Decrement();
         return;
     }
 
@@ -640,21 +636,20 @@ INLINE void HuC6280::OPCodes_TIN()
 {
     if (m_transfer_state == 0)
     {
-        OPCodes_TransferStart();
+        OPCodes_TransferStart(0xD3);
         return;
     }
 
     if (m_transfer_state == 2)
     {
+        m_cycles += 6;
         m_memory->Write(m_transfer_dest, m_memory->Read(m_transfer_source, true), true);
         m_transfer_source++;
         m_transfer_length--;
-        m_cycles += 6;
 
         if (m_transfer_length == 0)
             m_transfer_state = 1;
 
-        m_PC.Decrement();
         return;
     }
 
@@ -665,9 +660,10 @@ INLINE void HuC6280::OPCodes_TIN()
     }
 }
 
-INLINE void HuC6280::OPCodes_TransferStart()
+INLINE void HuC6280::OPCodes_TransferStart(u8 opcode)
 {
     m_transfer_state = 2;
+    m_transfer_opcode = opcode;
 
     StackPush8(m_Y.GetValue());
     StackPush8(m_A.GetValue());
@@ -688,7 +684,7 @@ INLINE void HuC6280::OPCodes_TransferEnd()
     m_X.SetValue(StackPop8());
     m_A.SetValue(StackPop8());
     m_Y.SetValue(StackPop8());
-    m_PC.SetValue(m_PC.GetValue() + 6);
+    m_PC.SetValue(m_PC.GetValue() + 7);
     m_cycles += 3;
 }
 

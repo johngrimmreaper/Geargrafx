@@ -49,15 +49,13 @@ INLINE u8 Memory::Read(u16 address, bool block_transfer)
     return m_test_memory[address];
 #endif
 
-    GG_CHECK_MEMORY_BREAKPOINT(m_huc6280, HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, true);
-
     u8 mpr_index = address >> 13;
     u8 bank = m_mpr[mpr_index];
     u16 offset = address & 0x1FFF;
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
-    if (m_huc6280->HasPhysicalMemoryBreakpoints(true))
-        CheckPhysicalMemoryBreakpoints(bank, offset, true);
+    if (m_huc6280->HasMemoryHooks(true))
+        CheckMemoryHooks(address, bank, offset, true);
 #endif
 
     if (bank != 0xFF)
@@ -128,7 +126,7 @@ INLINE u8 Memory::Read(u16 address, bool block_transfer)
             }
             case 0x1800:
                 // CDROM
-                if (m_media->IsCDROM())
+                if (m_media->IsCDROMHardwareEnabled())
                 {
                     if (IsValidPointer(m_current_mapper) && (offset >= 0x1A00))
                         return m_current_mapper->ReadHardware(offset);
@@ -264,6 +262,25 @@ INLINE bool Memory::TryPoke(u16 address, u8 bank, u8 value)
     return true;
 }
 
+INLINE void Memory::ApplyRamCheats()
+{
+    for (int i = 0; i < m_ram_cheat_count; i++)
+    {
+        GG_Cheat* cheat = &m_ram_cheats[i];
+        u8 bank = (u8)(cheat->address >> 13);
+        u16 offset = cheat->address & 0x1FFF;
+
+        if (cheat->compare >= 0)
+        {
+            u8 current = 0;
+            if (!TryPeek(offset, bank, &current) || (current != cheat->compare))
+                continue;
+        }
+
+        TryPoke(offset, bank, cheat->value);
+    }
+}
+
 INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
 {
 #if defined(GG_TESTING)
@@ -271,15 +288,13 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
     return;
 #endif
 
-    GG_CHECK_MEMORY_BREAKPOINT(m_huc6280, HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, false);
-
     u8 mpr_index = address >> 13;
     u8 bank = m_mpr[mpr_index];
     u16 offset = address & 0x1FFF;
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
-    if (m_huc6280->HasPhysicalMemoryBreakpoints(false))
-        CheckPhysicalMemoryBreakpoints(bank, offset, false);
+    if (m_huc6280->HasMemoryHooks(false))
+        CheckMemoryHooks(address, bank, offset, false);
 #endif
 
     if (IsValidPointer(m_current_mapper) && bank < 0x80)
@@ -313,6 +328,7 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
                 break;
             case 0x0800:
                 // PSG
+                m_huc6280->ClockPendingCycles();
                 m_audio->WritePSG(offset, value);
                 m_io_buffer = value;
                 break;
@@ -348,7 +364,7 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
             }
             case 0x1800:
                 // CDROM
-                if (m_media->IsCDROM())
+                if (m_media->IsCDROMHardwareEnabled())
                 {
                     if (IsValidPointer(m_current_mapper) && (offset >= 0x1A00))
                         m_current_mapper->WriteHardware(offset, value);
@@ -382,14 +398,6 @@ INLINE u8 Memory::GetMpr(u8 index)
 INLINE u32 Memory::GetPhysicalAddress(u16 address)
 {
     return (GetBank(address) << 13) | (address & 0x1FFF);
-}
-
-INLINE bool Memory::GetROMPhysicalAddress(u16 cpu_address, u32& rom_address)
-{
-    u8 bank = GetBank(cpu_address);
-    u16 bank_offset = cpu_address & 0x1FFF;
-
-    return GetROMPhysicalAddress(bank, bank_offset, rom_address);
 }
 
 INLINE bool Memory::GetROMPhysicalAddress(u8 bank, u16 bank_offset, u32& rom_address)
@@ -490,11 +498,6 @@ INLINE int Memory::GetCardRAMStart()
     return m_card_ram_start;
 }
 
-INLINE int Memory::GetCardRAMEnd()
-{
-    return m_card_ram_end;
-}
-
 INLINE int Memory::GetBackupRAMSize()
 {
     if (!m_backup_ram_enabled)
@@ -574,6 +577,14 @@ INLINE void Memory::UpdateBackupRam(bool enable)
 }
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
+INLINE void Memory::CheckMemoryHooks(u16 address, u8 bank, u16 offset, bool read)
+{
+    m_huc6280->CheckCpuAddressHooks(address, read);
+
+    if (m_huc6280->HasPhysicalMemoryBreakpoints(read))
+        CheckPhysicalMemoryBreakpoints(bank, offset, read);
+}
+
 INLINE void Memory::CheckPhysicalMemoryBreakpoints(u8 bank, u32 offset, bool read)
 {
     switch (GetBankType(bank))
@@ -601,6 +612,13 @@ INLINE void Memory::CheckPhysicalMemoryBreakpoints(u8 bank, u32 offset, bool rea
 
             break;
         }
+
+        case MEMORY_BANK_TYPE_BIOS:
+        {
+            if (!m_media->IsLaserActive())
+                return;
+        }
+        // fall through
 
         case MEMORY_BANK_TYPE_ROM:
         {

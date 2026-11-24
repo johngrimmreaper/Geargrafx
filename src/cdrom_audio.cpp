@@ -20,10 +20,12 @@
 #include "cdrom_audio.h"
 #include "cdrom_media.h"
 #include "trace_logger.h"
+#include "laseractive.h"
 
-CdRomAudio::CdRomAudio(CdRomMedia* cdrom_media)
+CdRomAudio::CdRomAudio(CdRomMedia* cdrom_media, LaserActive* laseractive)
 {
     m_cdrom_media = cdrom_media;
+    m_laseractive = laseractive;
     InitPointer(m_cdrom);
     InitPointer(m_scsi_controller);
     InitPointer(m_trace_logger);
@@ -92,6 +94,24 @@ void CdRomAudio::LogCdRomAudioEvent(u8 event, u32 lba, u32 param)
 #endif
 }
 
+void CdRomAudio::FinishLaserActivePlayback()
+{
+    m_current_lba = m_stop_lba;
+    TraceCdRomAudioEvent(TRACE_CDROM_AUDIO_BOUNDARY, m_stop_lba, m_current_lba);
+
+    if (m_stop_event == CD_AUDIO_STOP_EVENT_LOOP)
+    {
+        m_laseractive->NotifyAudioStart(m_start_lba, false);
+        m_laseractive->SetAudioEnd(m_stop_lba);
+        return;
+    }
+
+    m_current_state = CD_AUDIO_STATE_STOPPED;
+
+    if (m_stop_event == CD_AUDIO_STOP_EVENT_IRQ)
+        m_scsi_controller->StartStatus(ScsiController::SCSI_STATUS_GOOD);
+}
+
 void CdRomAudio::Reset()
 {
     m_buffer_index = 0;
@@ -130,9 +150,7 @@ void CdRomAudio::SaveState(std::ostream& stream)
 {
     using namespace std;
 
-    stream.write(reinterpret_cast<const char*> (&m_buffer_index), sizeof(m_buffer_index));
     stream.write(reinterpret_cast<const char*> (&m_frame_samples), sizeof(m_frame_samples));
-    stream.write(reinterpret_cast<const char*> (m_buffer), sizeof(m_buffer));
     stream.write(reinterpret_cast<const char*> (&m_current_state), sizeof(m_current_state));
     stream.write(reinterpret_cast<const char*> (&m_start_lba), sizeof(m_start_lba));
     stream.write(reinterpret_cast<const char*> (&m_stop_lba), sizeof(m_stop_lba));
@@ -156,7 +174,14 @@ void CdRomAudio::LoadState(std::istream& stream, int version)
         stream.read(reinterpret_cast<char*> (&sample_cycle_counter), sizeof(sample_cycle_counter));
     }
 
-    if (version >= 27)
+    if (version >= 40)
+    {
+        stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));
+
+        m_buffer_index = 0;
+        m_frame_samples = CLAMP(m_frame_samples, 0, GG_AUDIO_BUFFER_SIZE);
+    }
+    else if (version >= 27)
     {
         stream.read(reinterpret_cast<char*> (&m_buffer_index), sizeof(m_buffer_index));
         stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));
@@ -222,6 +247,6 @@ void CdRomAudio::SyncMediaCurrentSector()
 
         s32 track = m_cdrom_media->GetTrackFromLBA(current_sector);
         if (track >= 0)
-            m_cdrom_media->PreloadTrack((u32)track);
+            m_cdrom_media->PreloadTrack((u32)track, current_sector);
     }
 }

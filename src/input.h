@@ -55,7 +55,9 @@ public:
     void SetControllerType(GG_Controllers controller, GG_Controller_Type type);
     GG_Controller_Type GetControllerType(GG_Controllers controller);
     void SetAvenuePad3Button(GG_Controllers controller, GG_Keys button);
+    GG_Keys GetAvenuePad3Button(GG_Controllers controller);
     void SetMouseDelta(s32 x, s32 y);
+    u32 GetActivityCount() const;
     void EnableMB128(bool enable);
     void SetTurboLinkCallbacks(GG_TurboLink_Publish_Callback publish_callback, GG_TurboLink_Sample_Callback sample_callback,
         GG_TurboLink_Sync_Callback sync_callback, void* user_data);
@@ -76,7 +78,7 @@ public:
     void SetTraceLogger(TraceLogger* trace_logger);
     MB128* GetMB128();
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream, int version);
+    void LoadState(std::istream& stream, int version, bool has_mb128_flag);
 
 private:
     u64 GetMasterClockCycles();
@@ -93,6 +95,7 @@ private:
     bool m_clr;
     bool m_sel;
     u16 m_gamepads[GG_MAX_GAMEPADS];
+    u32 m_activity_count;
     u8 m_register;
     bool m_pce_jap;
     bool m_cdrom;

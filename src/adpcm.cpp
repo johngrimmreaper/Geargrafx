@@ -30,6 +30,7 @@ Adpcm::Adpcm()
     InitPointer(m_core);
     InitPointer(m_scsi_controller);
     InitPointer(m_trace_logger);
+    m_clock_speed = GG_ADPCM_DEFAULT_CLOCK_SPEED;
     Reset();
 
     m_state.CONTROL = &m_control;
@@ -61,6 +62,17 @@ void Adpcm::Init(GeargrafxCore* core, CdRom* cdrom, ScsiController* scsi_control
     Reset();
 }
 
+void Adpcm::SetClockSpeed(float clock_speed)
+{
+    m_clock_speed = clock_speed;
+    m_cycles_per_sample = CalculateCyclesPerSample(m_sample_rate & 0x0F);
+}
+
+float Adpcm::GetClockSpeed() const
+{
+    return m_clock_speed;
+}
+
 void Adpcm::SetTraceLogger(TraceLogger* trace_logger)
 {
     m_trace_logger = trace_logger;
@@ -76,6 +88,7 @@ void Adpcm::LogAdpcmEvent(u8 event, u16 reg, u8 value, u16 address)
     e.adpcm.value = value;
     e.adpcm.address = address;
     e.adpcm.length = m_length;
+    e.adpcm.clock_speed = m_clock_speed;
     bool playing = m_playing;
     bool play_pending = m_play_pending;
     bool half_irq = m_half_irq;
@@ -135,7 +148,6 @@ void Adpcm::Reset()
     m_read_address = 0;
     m_write_address = 0;
     m_address = 0;
-    m_samples_left = 0;
     m_sample_rate = 0xF;
     m_cycles_per_sample = CalculateCyclesPerSample(m_sample_rate);
     m_control = 0;
@@ -233,7 +245,6 @@ void Adpcm::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_read_address), sizeof(m_read_address));
     stream.write(reinterpret_cast<const char*> (&m_write_address), sizeof(m_write_address));
     stream.write(reinterpret_cast<const char*> (&m_address), sizeof(m_address));
-    stream.write(reinterpret_cast<const char*> (&m_samples_left), sizeof(m_samples_left));
     stream.write(reinterpret_cast<const char*> (&m_sample_rate), sizeof(m_sample_rate));
     stream.write(reinterpret_cast<const char*> (&m_cycles_per_sample), sizeof(m_cycles_per_sample));
     stream.write(reinterpret_cast<const char*> (&m_control), sizeof(m_control));
@@ -248,9 +259,7 @@ void Adpcm::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*> (&m_sample), sizeof(m_sample));
     stream.write(reinterpret_cast<const char*> (&m_step_index), sizeof(m_step_index));
     stream.write(reinterpret_cast<const char*> (&m_adpcm_cycle_counter), sizeof(m_adpcm_cycle_counter));
-    stream.write(reinterpret_cast<const char*> (&m_buffer_index), sizeof(m_buffer_index));
     stream.write(reinterpret_cast<const char*> (&m_frame_samples), sizeof(m_frame_samples));
-    stream.write(reinterpret_cast<const char*> (m_buffer), sizeof(m_buffer));
     stream.write(reinterpret_cast<const char*> (&m_filter_state), sizeof(m_filter_state));
     stream.write(reinterpret_cast<const char*> (&m_dc_prev_x), sizeof(m_dc_prev_x));
     stream.write(reinterpret_cast<const char*> (&m_dc_prev_y), sizeof(m_dc_prev_y));
@@ -269,7 +278,13 @@ void Adpcm::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_read_address), sizeof(m_read_address));
     stream.read(reinterpret_cast<char*> (&m_write_address), sizeof(m_write_address));
     stream.read(reinterpret_cast<char*> (&m_address), sizeof(m_address));
-    stream.read(reinterpret_cast<char*> (&m_samples_left), sizeof(m_samples_left));
+
+    if (version < 42)
+    {
+        u32 samples_left = 0;
+        stream.read(reinterpret_cast<char*> (&samples_left), sizeof(samples_left));
+    }
+
     stream.read(reinterpret_cast<char*> (&m_sample_rate), sizeof(m_sample_rate));
     stream.read(reinterpret_cast<char*> (&m_cycles_per_sample), sizeof(m_cycles_per_sample));
     stream.read(reinterpret_cast<char*> (&m_control), sizeof(m_control));
@@ -285,13 +300,25 @@ void Adpcm::LoadState(std::istream& stream, int version)
     stream.read(reinterpret_cast<char*> (&m_step_index), sizeof(m_step_index));
     stream.read(reinterpret_cast<char*> (&m_adpcm_cycle_counter), sizeof(m_adpcm_cycle_counter));
 
+    m_cycles_per_sample = CalculateCyclesPerSample(m_sample_rate & 0x0F);
+
+    if (version < 37)
+        m_adpcm_cycle_counter *= 65536;
+
     if (version < 32)
     {
         s32 audio_cycle_counter = 0;
         stream.read(reinterpret_cast<char*> (&audio_cycle_counter), sizeof(audio_cycle_counter));
     }
 
-    if (version >= 27)
+    if (version >= 40)
+    {
+        stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));
+
+        m_buffer_index = 0;
+        m_frame_samples = CLAMP(m_frame_samples, 0, GG_AUDIO_BUFFER_SIZE);
+    }
+    else if (version >= 27)
     {
         stream.read(reinterpret_cast<char*> (&m_buffer_index), sizeof(m_buffer_index));
         stream.read(reinterpret_cast<char*> (&m_frame_samples), sizeof(m_frame_samples));

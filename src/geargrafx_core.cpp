@@ -32,6 +32,7 @@
 #include "huc6270.h"
 #include "huc6280.h"
 #include "trace_logger.h"
+#include "profiler.h"
 #include "scsi_controller.h"
 #include "random.h"
 #include "cdrom.h"
@@ -41,6 +42,8 @@
 #include "audio.h"
 #include "input.h"
 #include "memory_stream.h"
+#include "laseractive.h"
+#include "load_detector.h"
 
 GeargrafxCore::GeargrafxCore()
 {
@@ -60,17 +63,28 @@ GeargrafxCore::GeargrafxCore()
     InitPointer(m_input);
     InitPointer(m_media);
     InitPointer(m_trace_logger);
+    InitPointer(m_profiler);
+    InitPointer(m_laseractive);
+    InitPointer(m_load_detector);
+    InitPointer(m_frame_buffer);
+    m_frame_rendered = false;
     m_paused = true;
     m_master_clock_cycles = 0;
     m_turbolink_cycles = 0;
     m_turbolink_next_sync_cycle = TURBOLINK_MAX_SYNC_CYCLES;
     m_frame_ready = false;
     m_mb128_mode = GG_MB128_AUTO;
+    m_requested_psg_revision = GG_PSG_REVISION_AUTO;
+    m_psg_revision = GG_PSG_REVISION_AUTO;
+    m_requested_adpcm_clock_speed = 0.0f;
 }
 
 GeargrafxCore::~GeargrafxCore()
 {
     SafeDelete(m_trace_logger);
+    SafeDelete(m_profiler);
+    SafeDelete(m_laseractive);
+    SafeDelete(m_load_detector);
     SafeDelete(m_media);
     SafeDelete(m_input);
     SafeDelete(m_audio);
@@ -93,6 +107,7 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     Log("Loading %s core %s by Ignacio Sanchez", GG_TITLE, GG_VERSION);
 
     m_cdrom_media = new CdRomMedia();
+    m_laseractive = new LaserActive(m_cdrom_media);
     m_media = new Media(m_cdrom_media);
     m_random = new Random();
     m_random->Seed((u32)time(NULL));
@@ -100,20 +115,21 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_huc6270_1 = new HuC6270(m_huc6280);
     m_huc6270_2 = new HuC6270(m_huc6280);
     m_huc6202 = new HuC6202(m_huc6270_1, m_huc6270_2, m_huc6280);
-    m_huc6260 = new HuC6260(m_huc6202, m_huc6280, m_random);
+    m_huc6260 = new HuC6260(m_huc6202, m_huc6280, m_random, m_laseractive);
     m_input = new Input(m_media, this);
     m_adpcm = new Adpcm();
-    m_cdrom_audio = new CdRomAudio(m_cdrom_media);
+    m_cdrom_audio = new CdRomAudio(m_cdrom_media, m_laseractive);
     m_audio = new Audio(m_adpcm, m_cdrom_audio);
-    m_scsi_controller = new ScsiController(m_cdrom_media, m_cdrom_audio, m_random);
-    m_cdrom = new CdRom(m_cdrom_audio, m_scsi_controller, m_audio, this);
-    m_memory = new Memory(m_huc6260, m_huc6202, m_huc6280, m_media, m_input, m_audio, m_cdrom, m_random);
+    m_scsi_controller = new ScsiController(m_cdrom_media, m_cdrom_audio, m_random, m_laseractive);
+    m_cdrom = new CdRom(m_cdrom_audio, m_scsi_controller, this, m_laseractive);
+    m_memory = new Memory(m_huc6260, m_huc6202, m_huc6280, m_media, m_input, m_audio, m_cdrom, m_random, m_laseractive);
+    m_load_detector = new LoadDetector();
 
     m_audio->Init();
     m_input->Init();
-    m_cdrom_media->Init();
+    m_cdrom_media->Init(m_laseractive);
     m_cdrom->Init(m_huc6280, m_memory, m_adpcm);
-    m_scsi_controller->Init(m_huc6280, m_cdrom);
+    m_scsi_controller->Init(m_cdrom);
     m_media->Init();
     m_memory->Init();
     m_huc6260->Init(pixel_format);
@@ -123,6 +139,11 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_huc6280->Init(m_memory, m_huc6202);
     m_adpcm->Init(this, m_cdrom, m_scsi_controller);
     m_cdrom_audio->Init(m_cdrom, m_scsi_controller);
+    m_laseractive->Init(m_cdrom, m_memory, m_cdrom_audio);
+    m_load_detector->Init(m_scsi_controller, m_cdrom_audio, m_audio, m_input, pixel_format);
+
+    SelectPSGRevision();
+    SelectADPCMClockSpeed();
 
 #if !defined(GG_DISABLE_DISASSEMBLER)
     m_trace_logger = new TraceLogger(&m_master_clock_cycles);
@@ -138,11 +159,63 @@ void GeargrafxCore::Init(GG_Input_Pump_Fn input_pump_fn, GG_Pixel_Format pixel_f
     m_cdrom_audio->SetTraceLogger(m_trace_logger);
     m_adpcm->SetTraceLogger(m_trace_logger);
     m_scsi_controller->SetTraceLogger(m_trace_logger);
+    m_profiler = new Profiler(&m_master_clock_cycles);
+    m_huc6280->SetProfiler(m_profiler);
 #endif
+}
+
+void GeargrafxCore::SetADPCMClockSpeed(float clock_speed)
+{
+    if ((clock_speed == 0.0f) || ((clock_speed >= 32000.0f) && (clock_speed <= 32200.0f)))
+    {
+        m_requested_adpcm_clock_speed = clock_speed;
+
+        if (IsValidPointer(m_adpcm) && IsValidPointer(m_media))
+            SelectADPCMClockSpeed();
+    }
+}
+
+void GeargrafxCore::SelectADPCMClockSpeed()
+{
+    float clock_speed = m_requested_adpcm_clock_speed;
+
+    if (clock_speed == 0.0f)
+        clock_speed = m_media->GetADPCMClockSpeed();
+
+    m_adpcm->SetClockSpeed(clock_speed);
+}
+
+void GeargrafxCore::SetPSGRevision(GG_PSG_Revision revision)
+{
+    if ((revision == GG_PSG_REVISION_AUTO) || (revision == GG_PSG_REVISION_HUC6280) ||
+        (revision == GG_PSG_REVISION_HUC6280A))
+    {
+        m_requested_psg_revision = revision;
+
+        if (IsValidPointer(m_audio) && IsValidPointer(m_media))
+            SelectPSGRevision();
+    }
+}
+
+void GeargrafxCore::SelectPSGRevision()
+{
+    GG_PSG_Revision revision = m_requested_psg_revision;
+
+    if (revision == GG_PSG_REVISION_AUTO)
+        revision = m_media->IsSGX() ? GG_PSG_REVISION_HUC6280A : GG_PSG_REVISION_HUC6280;
+
+    if (revision != m_psg_revision)
+    {
+        m_psg_revision = revision;
+        m_audio->GetPSG()->EnableHuC6280A(revision == GG_PSG_REVISION_HUC6280A);
+        Log("PSG revision: %s", revision == GG_PSG_REVISION_HUC6280A ? "HuC6280A" : "HuC6280");
+    }
 }
 
 bool GeargrafxCore::LoadMedia(const char* file_path, bool softpatching)
 {
+    ClearCheats();
+
     if (m_media->LoadMedia(file_path, softpatching))
     {
         m_memory->ResetDisassemblerRecords();
@@ -156,6 +229,8 @@ bool GeargrafxCore::LoadMedia(const char* file_path, bool softpatching)
 #if defined(GG_ENABLE_PHYSICAL_CDROM)
 bool GeargrafxCore::LoadPhysicalCdRom(const char* device_id)
 {
+    ClearCheats();
+
     if (m_media->LoadPhysicalCdRom(device_id))
     {
         m_memory->ResetDisassemblerRecords();
@@ -169,6 +244,8 @@ bool GeargrafxCore::LoadPhysicalCdRom(const char* device_id)
 
 bool GeargrafxCore::LoadHuCardFromBuffer(const u8* buffer, int size, const char* path)
 {
+    ClearCheats();
+
     if (m_media->LoadHuCardFromBuffer(buffer, size, path))
     {
         m_memory->ResetDisassemblerRecords();
@@ -194,19 +271,300 @@ void GeargrafxCore::UnloadBios(bool syscard)
     m_media->UnloadBios(syscard);
 }
 
+bool GeargrafxCore::LoadPacBios(const char* file_path, GG_LaserActive_Region region)
+{
+    return m_media->LoadPacBios(file_path, region);
+}
+
+bool GeargrafxCore::LoadPacBiosFromBuffer(const u8* buffer, int size, GG_LaserActive_Region region)
+{
+    return m_media->LoadPacBiosFromBuffer(buffer, size, region);
+}
+
+void GeargrafxCore::UnloadPacBios(GG_LaserActive_Region region)
+{
+    m_media->UnloadPacBios(region);
+}
+
+void GeargrafxCore::SetLaserActiveRegion(GG_LaserActive_Region region)
+{
+    m_media->SetLaserActiveRegion(region);
+}
+
+bool GeargrafxCore::EjectLaserDisc()
+{
+    bool ejected = m_cdrom_media->IsMmiEjected();
+    if (!m_cdrom_media->EjectMmi())
+        return false;
+
+    if (!ejected)
+        m_cdrom->NotifyMediaEjected();
+    return true;
+}
+
+bool GeargrafxCore::InsertLaserDisc()
+{
+    if (!m_cdrom_media->InsertMmi())
+        return false;
+
+    return true;
+}
+
+bool GeargrafxCore::SelectLaserDiscMedia(u32 index)
+{
+    if (!m_cdrom_media->SelectMmiMedia(index))
+        return false;
+
+    m_cdrom_audio->StopAudio();
+    return true;
+}
+
 bool GeargrafxCore::GetRuntimeInfo(GG_Runtime_Info& runtime_info)
 {
     runtime_info.screen_width = m_huc6260->GetCurrentWidth();
     runtime_info.screen_height = m_huc6260->GetCurrentHeight();
     runtime_info.width_scale = m_huc6260->GetWidthScale();
+    runtime_info.pixel_aspect_ratio = m_huc6260->GetPixelAspectRatio();
+    runtime_info.aspect_ratio = 0.0f;
+    if (m_media->IsCDROM() && m_media->IsLaserActive())
+        runtime_info.aspect_ratio = 4.0f / 3.0f;
     runtime_info.fps = huc6260_get_frame_rate(m_huc6260->GetTotalLines());
 
+    bool laseractive = m_media->IsCDROM() && m_media->IsLaserActive();
+    int texel_clocks = m_huc6260->GetTexelClocks();
+    int total_lines = m_huc6260->GetTotalLines();
+
+    runtime_info.pixel_clock = (float)((double)GG_MASTER_CLOCK_RATE / (double)texel_clocks / 1000000.0);
+    runtime_info.line_rate = (float)((double)GG_MASTER_CLOCK_RATE / (double)HUC6260_LINE_LENGTH / 1000.0);
+    runtime_info.source_lines = runtime_info.screen_height;
+    m_huc6260->GetActiveRegion(&runtime_info.active_region[0], &runtime_info.active_region[1],
+        &runtime_info.active_region[2], &runtime_info.active_region[3]);
+
+    if (laseractive)
+    {
+        runtime_info.chroma_origin = 0.0f;
+        runtime_info.chroma_texel_cycles = 0.0f;
+        runtime_info.chroma_line_cycles = 0.0f;
+        runtime_info.chroma_frame_cycles = 0.0f;
+    }
+    else
+    {
+        runtime_info.chroma_origin = m_huc6260->GetChromaOrigin();
+        runtime_info.chroma_texel_cycles = (float)texel_clocks / 6.0f;
+        runtime_info.chroma_line_cycles = (float)HUC6260_LINE_LENGTH / 6.0f;
+        runtime_info.chroma_frame_cycles = (float)((total_lines * HUC6260_LINE_LENGTH) % 6) / 6.0f;
+    }
+
+    m_huc6260->GetBorderColor(runtime_info.border_color);
+    runtime_info.border_valid = !laseractive;
+    runtime_info.system_type = laseractive ? 2 : (m_media->IsSGX() ? 1 : 0);
+    runtime_info.video_mode = m_huc6260->IsScaledWidth() ? 3 : (int)m_huc6260->GetSpeed();
+    runtime_info.low_pass = m_huc6260->IsLowPassActive();
+    runtime_info.black_and_white = m_huc6260->IsBlackAndWhite();
+
     return m_media->IsReady();
+}
+
+int GeargrafxCore::GetLineClocks(float* clocks, int max_count)
+{
+    int count = MIN(m_huc6260->GetCurrentHeight(), max_count);
+
+    for (int i = 0; i < count; i++)
+        clocks[i] = (float)((double)GG_MASTER_CLOCK_RATE / (double)m_huc6260->GetLineClockDivider(i) / 1000000.0);
+
+    return count;
+}
+
+bool GeargrafxCore::UpdateLoadDetection()
+{
+    if (m_paused || !m_media->IsReady() || !m_media->IsCDROMHardwareEnabled())
+        return false;
+
+    return m_load_detector->Update(m_frame_buffer, m_huc6260->GetCurrentWidth(), m_huc6260->GetCurrentHeight(),
+        m_frame_rendered);
+}
+
+void GeargrafxCore::ResetLoadDetection()
+{
+    m_load_detector->Reset();
+}
+
+bool GeargrafxCore::SetCheat(const char* cheat)
+{
+    if (!m_media->IsReady())
+        return false;
+
+    GG_Cheat cheats[GG_MAX_CHEATS];
+    int count = ParseCheat(cheat, cheats, GG_MAX_CHEATS);
+
+    if (count <= 0)
+        return false;
+
+    int ram_count = 0;
+    int rom_count = 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        switch (m_memory->GetBankType((u8)(cheats[i].address >> 13)))
+        {
+            case Memory::MEMORY_BANK_TYPE_ROM:
+                rom_count++;
+                break;
+            case Memory::MEMORY_BANK_TYPE_CARD_RAM:
+            case Memory::MEMORY_BANK_TYPE_BACKUP_RAM:
+            case Memory::MEMORY_BANK_TYPE_WRAM:
+            case Memory::MEMORY_BANK_TYPE_CDROM_RAM:
+                ram_count++;
+                break;
+            default:
+                return false;
+        }
+    }
+
+    if (!m_memory->CanAddRamCheats(ram_count) || !m_media->CanAddRomCheats(rom_count))
+        return false;
+
+    for (int i = 0; i < count; i++)
+    {
+        if (m_memory->GetBankType((u8)(cheats[i].address >> 13)) == Memory::MEMORY_BANK_TYPE_ROM)
+            m_media->AddRomCheat(cheats[i]);
+        else
+            m_memory->AddRamCheat(cheats[i]);
+    }
+
+    if (rom_count > 0)
+        m_media->ApplyRomCheats();
+
+    return true;
+}
+
+void GeargrafxCore::ClearCheats()
+{
+    m_media->ClearRomCheats();
+    m_memory->ClearRamCheats();
+}
+
+bool GeargrafxCore::IsValidCheat(const char* cheat)
+{
+    GG_Cheat cheats[GG_MAX_CHEATS];
+    return ParseCheat(cheat, cheats, GG_MAX_CHEATS) > 0;
+}
+
+int GeargrafxCore::ParseCheat(const char* cheat, GG_Cheat* cheats, int max_cheats)
+{
+    if (!IsValidPointer(cheat))
+        return 0;
+
+    int count = 0;
+    const char* p = cheat;
+
+    while (*p != 0)
+    {
+        while (IsCheatSeparator(*p))
+            p++;
+
+        if (*p == 0)
+            break;
+
+        const char* code = p;
+
+        while ((*p != 0) && !IsCheatSeparator(*p))
+            p++;
+
+        int parsed = ParseCheatCode(code, (int)(p - code), cheats + count, max_cheats - count);
+
+        if (parsed <= 0)
+            return 0;
+
+        count += parsed;
+    }
+
+    return count;
+}
+
+int GeargrafxCore::ParseCheatCode(const char* code, int length, GG_Cheat* cheats, int max_cheats)
+{
+    u32 address = 0;
+    u8 compare = 0;
+    bool has_compare = false;
+    int pos = 6;
+
+    if ((length < 8) || !parse_hex_string(code, 6, &address))
+        return 0;
+
+    if (code[pos] == '?')
+    {
+        if ((length < 11) || !parse_hex_string(code + 7, 2, &compare))
+            return 0;
+
+        has_compare = true;
+        pos = 9;
+    }
+
+    if (code[pos] != ':')
+        return 0;
+
+    pos++;
+
+    const char* value_str = code + pos;
+    int digits = length - pos;
+    u16 value = 0;
+
+    if (digits == 3)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            if ((value_str[i] < '0') || (value_str[i] > '9'))
+                return 0;
+
+            value = (value * 10) + (value_str[i] - '0');
+        }
+
+        if (value > 0xFF)
+            return 0;
+    }
+    else if (((digits < 1) || (digits > 4)) || !parse_hex_string(value_str, digits, &value))
+        return 0;
+
+    if (address > 0x1FFFFF)
+        address = ((address >> 16) << 13) | (address & 0x1FFF);
+
+    if (digits == 4)
+    {
+        if (has_compare || (max_cheats < 2))
+            return 0;
+
+        cheats[0].address = address;
+        cheats[0].compare = -1;
+        cheats[0].value = value & 0xFF;
+        cheats[1].address = (address + 1) & 0x1FFFFF;
+        cheats[1].compare = -1;
+        cheats[1].value = value >> 8;
+        return 2;
+    }
+
+    if (max_cheats < 1)
+        return 0;
+
+    cheats[0].address = address;
+    cheats[0].compare = has_compare ? compare : -1;
+    cheats[0].value = value & 0xFF;
+    return 1;
+}
+
+bool GeargrafxCore::IsCheatSeparator(char c)
+{
+    return (c == '+') || (c == ',') || (c == ';') || (c == ' ') || (c == '\t') || (c == '\r') || (c == '\n');
 }
 
 TraceLogger* GeargrafxCore::GetTraceLogger()
 {
     return m_trace_logger;
+}
+
+Profiler* GeargrafxCore::GetProfiler()
+{
+    return m_profiler;
 }
 
 void GeargrafxCore::SetTurboLinkCallbacks(
@@ -226,11 +584,6 @@ void GeargrafxCore::SetTurboLinkCableConnected(bool connected)
 void GeargrafxCore::InvalidateTurboLinkSample()
 {
     m_input->InvalidateTurboLinkSample();
-}
-
-bool GeargrafxCore::IsTurboLinkCableConnected() const
-{
-    return m_input->IsTurboLinkCableConnected();
 }
 
 GG_TurboLink_Drive GeargrafxCore::GetTurboLinkDrive() const
@@ -535,14 +888,15 @@ bool GeargrafxCore::SaveState(const char* path, int index, bool screenshot)
     using namespace std;
 
     string full_path = GetSaveStatePath(path, index);
+    string temp_path = full_path + ".tmp";
     Debug("Saving state to %s...", full_path.c_str());
 
     ofstream stream;
-    open_ofstream_utf8(stream, full_path.c_str(), ios::out | ios::binary);
+    open_ofstream_utf8(stream, temp_path.c_str(), ios::out | ios::binary);
 
     if (!stream.is_open())
     {
-        Error("Failed to open save state file for writing: %s", full_path.c_str());
+        Error("Failed to open save state file for writing: %s", temp_path.c_str());
         return false;
     }
 
@@ -550,14 +904,16 @@ bool GeargrafxCore::SaveState(const char* path, int index, bool screenshot)
     if (!SaveState(stream, size, screenshot))
     {
         stream.close();
+        remove_file_utf8(temp_path.c_str());
         Error("Failed to save state to file: %s", full_path.c_str());
         return false;
     }
 
     stream.close();
 
-    if (!stream.good())
+    if (!stream.good() || !rename_file_utf8(temp_path.c_str(), full_path.c_str()))
     {
+        remove_file_utf8(temp_path.c_str());
         Error("Failed to write save state file: %s", full_path.c_str());
         return false;
     }
@@ -621,6 +977,12 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
 
     Debug("Serializing save state...");
 
+    bool cdrom_hardware_enabled = m_media->IsCDROMHardwareEnabled();
+    stream.write(reinterpret_cast<const char*> (&cdrom_hardware_enabled), sizeof(cdrom_hardware_enabled));
+
+    u32 content_crc = m_media->GetCRC();
+    stream.write(reinterpret_cast<const char*>(&content_crc), sizeof(content_crc));
+
     stream.write(reinterpret_cast<const char*> (&m_master_clock_cycles), sizeof(m_master_clock_cycles));
 
     m_memory->SaveState(stream);
@@ -631,12 +993,24 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
     m_huc6280->SaveState(stream);
     m_audio->SaveState(stream);
     m_input->SaveState(stream);
-    if (m_media->IsCDROM())
+    if (m_media->IsCDROMHardwareEnabled())
     {
+        if (m_cdrom_media->IsMmi() && !m_media->IsLaserActive())
+        {
+            u32 index = m_cdrom_media->GetSelectedMmiMediaIndex();
+            bool ejected = m_cdrom_media->IsMmiEjected();
+            stream.write(reinterpret_cast<const char*>(&index), sizeof(index));
+            stream.write(reinterpret_cast<const char*>(&ejected), sizeof(ejected));
+        }
         m_cdrom->SaveState(stream);
         m_scsi_controller->SaveState(stream);
         m_cdrom_audio->SaveState(stream);
         m_adpcm->SaveState(stream);
+        if (m_media->IsLaserActive())
+        {
+            m_laseractive->SaveState(stream);
+            m_huc6260->SaveLaserActiveState(stream);
+        }
     }
     m_random->SaveState(stream);
 
@@ -647,6 +1021,7 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
     }
 
 #if defined(__LIBRETRO__)
+    UNUSED(screenshot);
     GG_SaveState_Header_Libretro header;
     header.magic = GG_SAVESTATE_MAGIC;
     header.version = GG_SAVESTATE_VERSION;
@@ -669,7 +1044,9 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
     Debug("Save state header rom crc: 0x%08x", header.rom_crc);
     Debug("Save state header emu build: %s", header.emu_build);
 
-    if (screenshot)
+    u8* frame_buffer = m_huc6260->GetBuffer();
+
+    if (screenshot && IsValidPointer(frame_buffer))
     {
         header.screenshot_width = m_huc6260->GetCurrentWidth();
         header.screenshot_height = m_huc6260->GetCurrentHeight();
@@ -678,8 +1055,6 @@ bool GeargrafxCore::SaveState(std::ostream& stream, size_t& size, bool screensho
         int bytes_per_pixel = 2;
         if (m_huc6260->GetPixelFormat() == GG_PIXEL_RGBA8888)
             bytes_per_pixel = 4;
-
-        u8* frame_buffer = m_huc6260->GetBuffer();
 
         header.screenshot_size = header.screenshot_width * header.screenshot_height * bytes_per_pixel;
         stream.write(reinterpret_cast<const char*>(frame_buffer), header.screenshot_size);
@@ -791,6 +1166,7 @@ bool GeargrafxCore::LoadState(std::istream& stream)
 
     stream.seekg(0, ios::end);
     size_t size = static_cast<size_t>(stream.tellg());
+    size_t body_size = 0;
 
     // Try desktop header first (larger, contains all info)
     GG_SaveState_Header desktop_header;
@@ -803,6 +1179,8 @@ bool GeargrafxCore::LoadState(std::istream& stream)
         {
             header.magic = desktop_header.magic;
             header.version = desktop_header.version;
+            if (desktop_header.screenshot_size <= size - sizeof(desktop_header))
+                body_size = size - sizeof(desktop_header) - desktop_header.screenshot_size;
 #if !defined(__LIBRETRO__)
             is_desktop_savestate = true;
 #endif
@@ -815,6 +1193,7 @@ bool GeargrafxCore::LoadState(std::istream& stream)
     {
         stream.seekg(size - sizeof(header), ios::beg);
         stream.read(reinterpret_cast<char*> (&header), sizeof(header));
+        body_size = size - sizeof(header);
     }
 
     stream.seekg(0, ios::beg);
@@ -831,6 +1210,18 @@ bool GeargrafxCore::LoadState(std::istream& stream)
     if (header.version < GG_SAVESTATE_MIN_VERSION || header.version > GG_SAVESTATE_VERSION)
     {
         Error("Invalid save state version: %d", header.version);
+        return false;
+    }
+
+    if (body_size == 0)
+    {
+        Error("Invalid save state size: %d", (int)size);
+        return false;
+    }
+
+    if ((header.version < 39) && m_cdrom_media->IsMmi())
+    {
+        Error("MMI save state version %u lacks required state", header.version);
         return false;
     }
 
@@ -861,6 +1252,27 @@ bool GeargrafxCore::LoadState(std::istream& stream)
     }
 #endif
 
+    u8 cdrom_hardware_enabled = m_media->IsCDROM() ? 1 : 0;
+    if (header.version >= 38)
+        stream.read(reinterpret_cast<char*>(&cdrom_hardware_enabled), sizeof(cdrom_hardware_enabled));
+
+    if (stream.fail() || cdrom_hardware_enabled > 1 || (cdrom_hardware_enabled != (m_media->IsCDROMHardwareEnabled() ? 1 : 0)))
+    {
+        Error("Save state CD-ROM hardware configuration does not match");
+        return false;
+    }
+
+    if (header.version >= 41)
+    {
+        u32 content_crc = 0;
+        stream.read(reinterpret_cast<char*>(&content_crc), sizeof(content_crc));
+        if (stream.fail() || (content_crc != m_media->GetCRC()))
+        {
+            Error("Save state content CRC does not match");
+            return false;
+        }
+    }
+
     Debug("Unserializing save state...");
 
     if (header.version >= 27)
@@ -868,32 +1280,76 @@ bool GeargrafxCore::LoadState(std::istream& stream)
     else
         m_master_clock_cycles = 0;
 
-    m_memory->LoadState(stream);
+    m_memory->LoadState(stream, header.version, body_size);
     m_huc6202->LoadState(stream);
-    m_huc6260->LoadState(stream);
+    m_huc6260->LoadState(stream, header.version);
     m_huc6270_1->LoadState(stream, header.version);
     m_huc6270_2->LoadState(stream, header.version);
-    m_huc6280->LoadState(stream);
+    m_huc6280->LoadState(stream, header.version);
     m_audio->LoadState(stream, header.version);
-    m_input->LoadState(stream, header.version);
-    if (m_media->IsCDROM())
+
+    // Some v23 states lack the MB128 flag, try without it first so MB128 RAM is never loaded from misaligned data
+    streampos tail_position = stream.tellg();
+    bool loaded = LoadStateTail(stream, header.version, header.version > 23, body_size);
+
+    if (!loaded && (header.version == 23) && (tail_position != streampos(-1)))
     {
-        m_cdrom->LoadState(stream, header.version);
-        m_scsi_controller->LoadState(stream, header.version);
-        m_cdrom_audio->LoadState(stream, header.version);
-        m_adpcm->LoadState(stream, header.version);
+        stream.clear();
+        stream.seekg(tail_position);
+        loaded = LoadStateTail(stream, header.version, true, body_size);
     }
 
-    if (header.version >= 33)
-        m_random->LoadState(stream);
-
-    if (stream.fail())
+    if (!loaded)
     {
         Error("Failed to unserialize save state");
+        ResetMedia(true);
         return false;
     }
 
     return true;
+}
+
+bool GeargrafxCore::LoadStateTail(std::istream& stream, u32 version, bool has_mb128_flag, size_t end)
+{
+    m_input->LoadState(stream, version, has_mb128_flag);
+
+    if (m_media->IsCDROMHardwareEnabled())
+    {
+        if (m_cdrom_media->IsMmi() && !m_media->IsLaserActive())
+        {
+            u32 index = 0;
+            bool ejected = false;
+            stream.read(reinterpret_cast<char*>(&index), sizeof(index));
+            stream.read(reinterpret_cast<char*>(&ejected), sizeof(ejected));
+            if (stream.fail())
+                return false;
+            if (index != m_cdrom_media->GetSelectedMmiMediaIndex() &&
+                (!m_cdrom_media->EjectMmi() || !m_cdrom_media->SelectMmiMedia(index)))
+                return false;
+            if (ejected)
+                m_cdrom_media->EjectMmi();
+            else
+                m_cdrom_media->InsertMmi();
+        }
+
+        m_cdrom->LoadState(stream, version);
+        m_scsi_controller->LoadState(stream, version);
+        if (stream.fail())
+            return false;
+        m_cdrom_audio->LoadState(stream, version);
+        m_adpcm->LoadState(stream, version);
+
+        if (m_media->IsLaserActive())
+        {
+            m_laseractive->LoadState(stream, version);
+            m_huc6260->LoadLaserActiveState(stream);
+        }
+    }
+
+    if (version >= 33)
+        m_random->LoadState(stream);
+
+    return !stream.fail() && (static_cast<size_t>(stream.tellg()) == end);
 }
 
 bool GeargrafxCore::GetSaveStateHeader(int index, const char* path, GG_SaveState_Header* header)
@@ -1017,7 +1473,13 @@ bool GeargrafxCore::GetSaveStateScreenshot(int index, const char* path, GG_SaveS
 
 void GeargrafxCore::Reset()
 {
+    m_media->RestoreRomCheats();
+
     m_master_clock_cycles = 0;
+
+    if (IsValidPointer(m_profiler))
+        m_profiler->Reset();
+
     m_paused = false;
 
     m_media->GatherMediaInfo();
@@ -1025,9 +1487,15 @@ void GeargrafxCore::Reset()
     GG_Console_Type console_type = m_media->GetConsoleType();
     bool force_backup_ram = m_media->IsBackupRAMForced();
     bool is_sgx = m_media->IsSGX();
-    bool is_cdrom = m_media->IsCDROM();
+    bool is_cdrom = m_media->IsCDROMHardwareEnabled();
 
-    m_input->EnablePCEJap((console_type == GG_CONSOLE_PCE) || (console_type == GG_CONSOLE_SGX));
+    SelectPSGRevision();
+    SelectADPCMClockSpeed();
+
+    bool pce_japanese = (console_type == GG_CONSOLE_PCE) || (console_type == GG_CONSOLE_SGX);
+    if (m_media->IsLaserActive())
+        pce_japanese = m_media->GetSelectedLaserActiveRegion() != GG_LASERACTIVE_REGION_US;
+    m_input->EnablePCEJap(pce_japanese);
     m_input->EnableCDROM(is_cdrom || force_backup_ram);
     m_memory->EnableBackupRam(is_cdrom || force_backup_ram);
 
@@ -1041,10 +1509,14 @@ void GeargrafxCore::Reset()
     m_scsi_controller->Reset();
     m_cdrom_audio->Reset();
     m_adpcm->Reset();
+    m_laseractive->Reset();
     m_audio->Reset(is_cdrom);
     m_input->Reset();
+    m_load_detector->Reset();
 
     EnableMB128(m_mb128_mode);
+
+    m_media->ApplyRomCheats();
 }
 
 void GeargrafxCore::EnableMB128(GG_MB128_Mode mode)

@@ -209,11 +209,13 @@ static const McpToolCategory kMcpToolCategories[] =
     {"hardware_turbolink", "TurboLink Hardware",
         "Inspect PC Engine GT BU5782K SEL/CLR, open-drain drivers, sampled K/line state, timing, and shared-memory endpoint readiness."},
     {"media", "Media", "Load ROMs or BIOS files, list recent media, load symbols, and inspect loaded HuCard/CD/media information."},
-    {"capture", "Capture", "Capture current screenshots and PC Engine sprite images or sprite metadata."},
+    {"capture", "Capture", "Capture current screenshots, record AVI video, and PC Engine sprite images or sprite metadata."},
     {"state", "Save States", "List save slots, select a slot, save emulator state, and load emulator state."},
     {"rewind", "Rewind", "Inspect rewind buffer status and seek to rewind snapshots for time-travel debugging."},
     {"input", "Input", "Inspect or control gamepad, mouse, controller type, and TurboTap state."},
     {"trace", "Trace", "Read trace log entries and configure CPU, interrupt, video, audio, input, TurboLink, memory, CD-ROM, and debug-message tracing."},
+    {"profiler", "Profiler", "Start, stop, or reset the function profiler and read per-function call counts and cycle statistics."},
+    {"cheats", "Cheats", "List, add, and remove cheat codes in AAAAAA:VV physical address format."},
     {"tools", "Other Tools", "Additional emulator/debugger tools that do not fit another category."}
 };
 
@@ -278,12 +280,13 @@ static const char* const kMcpTurboLinkTools[] =
 
 static const char* const kMcpMediaTools[] =
 {
-    "load_media", "get_media_info", "list_recent_media", "load_bios"
+    "load_media", "get_media_info", "list_recent_media", "load_bios",
+    "list_mmi_media", "eject_mmi_media", "insert_mmi_media", "select_mmi_media"
 };
 
 static const char* const kMcpCaptureTools[] =
 {
-    "get_screenshot", "list_sprites", "get_sprite_image"
+    "get_screenshot", "start_video_recording", "stop_video_recording", "list_sprites", "get_sprite_image"
 };
 
 static const char* const kMcpStateTools[] =
@@ -308,6 +311,16 @@ static const char* const kMcpTraceTools[] =
     "get_trace_log", "set_trace_log"
 };
 
+static const char* const kMcpProfilerTools[] =
+{
+    "set_profiler", "get_profiler_data"
+};
+
+static const char* const kMcpCheatTools[] =
+{
+    "list_cheats", "add_cheat", "remove_cheat"
+};
+
 static const McpToolCategoryTools kMcpToolCategoryTools[] =
 {
     {"execution", kMcpExecutionTools, MCP_ARRAY_COUNT(kMcpExecutionTools)},
@@ -325,7 +338,9 @@ static const McpToolCategoryTools kMcpToolCategoryTools[] =
     {"state", kMcpStateTools, MCP_ARRAY_COUNT(kMcpStateTools)},
     {"rewind", kMcpRewindTools, MCP_ARRAY_COUNT(kMcpRewindTools)},
     {"input", kMcpInputTools, MCP_ARRAY_COUNT(kMcpInputTools)},
-    {"trace", kMcpTraceTools, MCP_ARRAY_COUNT(kMcpTraceTools)}
+    {"trace", kMcpTraceTools, MCP_ARRAY_COUNT(kMcpTraceTools)},
+    {"profiler", kMcpProfilerTools, MCP_ARRAY_COUNT(kMcpProfilerTools)},
+    {"cheats", kMcpCheatTools, MCP_ARRAY_COUNT(kMcpCheatTools)}
 };
 
 const size_t kMcpSearchToolLimit = 20;
@@ -592,11 +607,6 @@ json McpToolRegistry::SearchTools(const std::string& query) const
     return tools;
 }
 
-bool McpToolRegistry::IsRouterTool(const std::string& tool_name) const
-{
-    return IsRouterToolName(tool_name);
-}
-
 bool McpToolRegistry::IsRouterTool(const std::string& tool_name, const std::string& router_tool_name) const
 {
     return NormalizeToolName(tool_name) == router_tool_name;
@@ -715,6 +725,10 @@ std::string McpToolRegistry::AliasesForTool(const std::string& tool_name) const
         aliases += " label labels names debug symbols";
     if (StringContains(name, "trace"))
         aliases += " log logger events cpu irq input turbolink link cable debug output";
+    if (StringContains(name, "profiler"))
+        aliases += " performance cycles timing hotspot function calls frame";
+    if (StringContains(name, "video_recording"))
+        aliases += " record movie clip capture avi mjpeg gameplay";
     if (StringContains(name, "controller"))
         aliases += " input joypad gamepad button macro tap press release";
     if (StringContains(name, "turbolink"))

@@ -29,6 +29,7 @@
 #include "gui_debug_text.h"
 #include "gui_debug_memory.h"
 #include "gui.h"
+#include "gui_notifications.h"
 #include "gui_filedialogs.h"
 #include "config.h"
 #include "emu.h"
@@ -444,7 +445,7 @@ void gui_debug_window_disassembler(void)
     ImGui::PopStyleVar();
 }
 
-void gui_debug_save_disassembler(const char* file_path, bool full)
+bool gui_debug_save_disassembler(const char* file_path, bool full)
 {
     FILE* file = fopen_utf8(file_path, "w");
 
@@ -456,7 +457,10 @@ void gui_debug_save_disassembler(const char* file_path, bool full)
             save_current_disassembler(file);
 
         fclose(file);
+        return true;
     }
+
+    return false;
 }
 
 static void draw_controls(void)
@@ -1938,7 +1942,7 @@ static void request_goto_physical_address(u16 address, u8 bank)
         char message[96];
         snprintf(message, sizeof(message),
             "No decoded code at bank %02X, address $%04X", bank, address);
-        gui_set_status_message(message, 3000);
+        gui_notify(gui_NotificationWarning, NULL, message);
     }
 }
 
@@ -1948,6 +1952,11 @@ static void request_goto_bank_address(u16 address, u8 bank)
         request_goto_live_address(address);
     else
         request_goto_physical_address(address, bank);
+}
+
+void gui_debug_goto_address(u16 address, u8 bank)
+{
+    request_goto_bank_address(address, bank);
 }
 
 static bool is_return_instruction(u8 opcode)
@@ -2197,22 +2206,6 @@ static bool resolve_symbol_with_context(GG_Disassembler_Record* record, std::str
     return false;
 }
 
-bool gui_debug_resolve_symbol(GG_Disassembler_Record* record, std::string& instr,
-    const char* color, const char* original_color, const char** out_name, u16* out_address)
-{
-    u16 lookup_address = 0;
-    bool is_zp = false;
-
-    if (!get_record_operand(record, &lookup_address, &is_zp))
-        return false;
-
-    u16 bank_address = is_zp ? (0x2000 | lookup_address) : lookup_address;
-    u8 bank = record->jump ? record->jump_bank : emu_get_core()->GetMemory()->GetBank(bank_address);
-
-    return resolve_symbol_with_context(record, instr, color, original_color,
-        lookup_address, is_zp, bank, out_name, out_address);
-}
-
 static bool resolve_line_symbol(DisassemblerLine* line, std::string& instr,
     const char* color, const char* original_color, const char** out_name, u16* out_address)
 {
@@ -2248,17 +2241,27 @@ static bool resolve_label_with_context(GG_Disassembler_Record* record, std::stri
         }
     }
 
-    for (int i = 0; i < k_debug_label_count; i++)
+    const stDebugLabel* labels = k_debug_labels;
+    int label_count = k_debug_label_count;
+    u16 offset = label_lookup - hardware_offset;
+
+    if (emu_get_core()->GetMedia()->IsLaserActive() && ((offset >= 0x18C0 && offset <= 0x18C3) || (offset >= 0x1920 && offset <= 0x195F)))
     {
-        if (k_debug_labels[i].address + hardware_offset == label_lookup)
+        labels = k_debug_laseractive_labels;
+        label_count = k_debug_laseractive_label_count;
+    }
+
+    for (int i = 0; i < label_count; i++)
+    {
+        if (labels[i].address + hardware_offset == label_lookup)
         {
             char label_address[5];
             snprintf(label_address, 5, "%04X", lookup_address);
-            std::string replacement = std::string(color) + k_debug_labels[i].label + "_" + label_address + original_color;
+            std::string replacement = std::string(color) + labels[i].label + "_" + label_address + original_color;
 
             if (replace_operand_in_string(record, instr, replacement.c_str()))
             {
-                if (out_name) *out_name = k_debug_labels[i].label;
+                if (out_name) *out_name = labels[i].label;
                 if (out_address) *out_address = lookup_address;
                 return true;
             }
@@ -2266,22 +2269,6 @@ static bool resolve_label_with_context(GG_Disassembler_Record* record, std::stri
     }
 
     return false;
-}
-
-bool gui_debug_resolve_label(GG_Disassembler_Record* record, std::string& instr,
-    const char* color, const char* original_color, const char** out_name, u16* out_address)
-{
-    u16 lookup_address = 0;
-    bool is_zp = false;
-
-    if (!get_record_operand(record, &lookup_address, &is_zp))
-        return false;
-
-    u16 bank_address = is_zp ? (0x2000 | lookup_address) : lookup_address;
-    u8 operand_bank = record->jump ? record->jump_bank : emu_get_core()->GetMemory()->GetBank(bank_address);
-
-    return resolve_label_with_context(record, instr, color, original_color,
-        lookup_address, is_zp, operand_bank, out_name, out_address);
 }
 
 static bool resolve_line_label(DisassemblerLine* line, std::string& instr,
@@ -2778,6 +2765,8 @@ static void add_bookmark_popup(void)
         add_bookmark_open = false;
     }
 
+    gui_center_next_window();
+
     if (ImGui::BeginPopupModal("Add Bookmark", NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
         static char address_bookmark[5] = "";
@@ -2857,6 +2846,8 @@ static void add_symbol_popup(void)
         ImGui::OpenPopup("Add Symbol");
         add_symbol_open = false;
     }
+
+    gui_center_next_window();
 
     if (ImGui::BeginPopupModal("Add Symbol", NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
@@ -3295,6 +3286,31 @@ DebugSymbol* gui_debug_get_symbol(u8 bank, u16 address)
         return NULL;
 
     return fixed_symbols[bank][address];
+}
+
+const char* gui_debug_get_symbol_name(u16 bank, u16 address, bool* is_manual)
+{
+    *is_manual = false;
+
+    if (IsValidPointer(fixed_symbols) && IsValidPointer(dynamic_symbols))
+    {
+        DebugSymbol* symbol = fixed_symbols[(u8)bank][address];
+        if (IsValidPointer(symbol))
+        {
+            *is_manual = true;
+            return symbol->text;
+        }
+
+        symbol = dynamic_symbols[(u8)bank][address];
+        if (IsValidPointer(symbol))
+            return symbol->text;
+    }
+
+    GG_Disassembler_Record* record = emu_get_core()->GetMemory()->GetDisassemblerRecord(address, (u8)bank);
+    if (IsValidPointer(record) && (record->auto_symbol[0] != 0))
+        return record->auto_symbol;
+
+    return NULL;
 }
 
 void gui_debug_find_symbols(const char* name, std::vector<DebugSymbol*>& symbols)

@@ -30,48 +30,43 @@
 #include "cdrom.h"
 #include "cdrom_audio.h"
 #include "adpcm.h"
+#include "laseractive.h"
 
 INLINE bool GeargrafxCore::RunToVBlank(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug, bool render)
 {
     if (m_paused || !m_media->IsReady())
         return false;
 
-    const bool is_cdrom = m_media->IsCDROM();
+    m_frame_buffer = frame_buffer;
+    m_frame_rendered = render;
+
+    const bool is_cdrom = m_media->IsCDROMHardwareEnabled();
     const bool is_sgx = m_media->IsSGX();
+
 #if defined(GG_DISABLE_DISASSEMBLER)
     const bool debugger = false;
 #else
     const bool debugger = true;
 #endif
 
-    if (debugger)
+    if (!is_cdrom)
     {
-        if (is_cdrom && is_sgx)
-            return RunToVBlankTemplate<true, true, true>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else if (is_cdrom && !is_sgx)
-            return RunToVBlankTemplate<true, true, false>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else if (!is_cdrom && is_sgx)
-            return RunToVBlankTemplate<true, false, true>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else
-            return RunToVBlankTemplate<true, false, false>(frame_buffer, sample_buffer, sample_count, debug, render);
+        if (is_sgx)
+            return RunToVBlankTemplate<debugger, false, true>(frame_buffer, sample_buffer, sample_count, debug, render);
+        return RunToVBlankTemplate<debugger, false, false>(frame_buffer, sample_buffer, sample_count, debug, render);
     }
-    else
-    {
-        if (is_cdrom && is_sgx)
-            return RunToVBlankTemplate<false, true, true>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else if (is_cdrom && !is_sgx)
-            return RunToVBlankTemplate<false, true, false>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else if (!is_cdrom && is_sgx)
-            return RunToVBlankTemplate<false, false, true>(frame_buffer, sample_buffer, sample_count, debug, render);
-        else
-            return RunToVBlankTemplate<false, false, false>(frame_buffer, sample_buffer, sample_count, debug, render);
-    }
+
+    if (is_sgx)
+        return RunToVBlankTemplate<debugger, true, true>(frame_buffer, sample_buffer, sample_count, debug, render);
+    if (!m_media->IsLaserActive())
+        return RunToVBlankTemplate<debugger, true, false>(frame_buffer, sample_buffer, sample_count, debug, render);
+    return RunToVBlankTemplate<debugger, true, false, true>(frame_buffer, sample_buffer, sample_count, debug, render);
 }
 
-template<bool debugger, bool is_cdrom, bool is_sgx>
+template<bool debugger, bool is_cdrom, bool is_sgx, bool is_laseractive>
 bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug, bool render)
 {
-    m_huc6280->SetHardwareClock(&GeargrafxCore::ClockHardwareCallback<is_cdrom, is_sgx>, this);
+    m_huc6280->SetHardwareClock(&GeargrafxCore::ClockHardwareCallback<is_cdrom, is_sgx, is_laseractive>, this);
 
     if (debugger)
     {
@@ -89,6 +84,7 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
 
         m_huc6260->SetBuffer(render ? frame_buffer : NULL);
         bool stop = false;
+        bool frame_ready = false;
 
         do
         {
@@ -98,8 +94,11 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
             u32 remaining_cycles = (cycles > clocked_cycles) ? cycles - clocked_cycles : 0;
 
             stop = m_frame_ready;
-            if (ClockHardware<is_cdrom, is_sgx>(remaining_cycles))
+            if (ClockHardware<is_cdrom, is_sgx, is_laseractive>(m_huc6280->OverclockCycles(remaining_cycles)))
                 stop = true;
+
+            if (stop)
+                frame_ready = true;
 
             if (debug_enable)
             {
@@ -121,6 +120,9 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
         }
         while (!stop);
 
+        if (frame_ready)
+            m_memory->ApplyRamCheats();
+
         m_audio->EndFrame(sample_buffer, sample_count);
         m_input->EndFrame();
 
@@ -140,10 +142,12 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
             u32 remaining_cycles = (cycles > clocked_cycles) ? cycles - clocked_cycles : 0;
 
             stop = m_frame_ready;
-            if (ClockHardware<is_cdrom, is_sgx>(remaining_cycles))
+            if (ClockHardware<is_cdrom, is_sgx, is_laseractive>(m_huc6280->OverclockCycles(remaining_cycles)))
                 stop = true;
         }
         while (!stop);
+
+        m_memory->ApplyRamCheats();
 
         m_audio->EndFrame(sample_buffer, sample_count);
         m_input->EndFrame();
@@ -152,7 +156,7 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
     }
 }
 
-template<bool is_cdrom, bool is_sgx>
+template<bool is_cdrom, bool is_sgx, bool is_laseractive>
 INLINE bool GeargrafxCore::ClockHardware(u32 cycles)
 {
     if (cycles == 0)
@@ -169,11 +173,13 @@ INLINE bool GeargrafxCore::ClockHardware(u32 cycles)
                 m_master_clock_cycles += cycles;
                 m_turbolink_cycles += cycles;
                 m_huc6280->ClockTimer(cycles);
-                if (m_huc6260->Clock<is_sgx>(cycles))
+                if (m_huc6260->Clock<is_sgx, is_laseractive>(cycles))
                     frame_ready = true;
                 if (is_cdrom)
                 {
                     m_cdrom->Clock(cycles);
+                    if (is_laseractive)
+                        m_laseractive->Clock(cycles);
                 }
                 m_audio->Clock(cycles);
                 break;
@@ -184,11 +190,13 @@ INLINE bool GeargrafxCore::ClockHardware(u32 cycles)
             m_turbolink_cycles += step;
             m_huc6280->ClockTimer(step);
             m_huc6202->ProcessCpuVramAccesses(step);
-            if (m_huc6260->Clock<is_sgx>(step))
+            if (m_huc6260->Clock<is_sgx, is_laseractive>(step))
                 frame_ready = true;
             if (is_cdrom)
             {
                 m_cdrom->Clock(step);
+                if (is_laseractive)
+                    m_laseractive->Clock(step);
             }
             m_audio->Clock(step);
             cycles -= step;
@@ -215,10 +223,12 @@ INLINE bool GeargrafxCore::ClockHardware(u32 cycles)
         m_huc6280->ClockTimer(step);
         if (m_huc6202->HasPendingCpuVramAccess())
             m_huc6202->ProcessCpuVramAccesses(step);
-        if (m_huc6260->Clock<is_sgx>(step))
+        if (m_huc6260->Clock<is_sgx, is_laseractive>(step))
             frame_ready = true;
         if (is_cdrom)
             m_cdrom->Clock(step);
+        if (is_laseractive)
+            m_laseractive->Clock(step);
         m_audio->Clock(step);
         cycles -= step;
 
@@ -232,13 +242,13 @@ INLINE bool GeargrafxCore::ClockHardware(u32 cycles)
     return frame_ready;
 }
 
-template<bool is_cdrom, bool is_sgx>
+template<bool is_cdrom, bool is_sgx, bool is_laseractive>
 INLINE void GeargrafxCore::ClockHardwareCallback(void* context, u32 cycles)
 {
     GeargrafxCore* core = static_cast<GeargrafxCore*>(context);
     assert(IsValidPointer(core));
 
-    if (core->ClockHardware<is_cdrom, is_sgx>(cycles))
+    if (core->ClockHardware<is_cdrom, is_sgx, is_laseractive>(cycles))
         core->m_frame_ready = true;
 }
 
@@ -310,6 +320,11 @@ INLINE Audio* GeargrafxCore::GetAudio()
 INLINE Input* GeargrafxCore::GetInput()
 {
     return m_input;
+}
+
+INLINE LaserActive* GeargrafxCore::GetLaserActive()
+{
+    return m_laseractive;
 }
 
 INLINE u64 GeargrafxCore::GetMasterClockCycles()

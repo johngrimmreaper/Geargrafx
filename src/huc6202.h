@@ -81,6 +81,7 @@ public:
     void ClockSGX(u16* pixel_1, u16* pixel_2);
     void SetHSyncHigh();
     void SetVSyncLow();
+    bool GetDisplayRange(s32* start, s32* end);
     u8 ReadRegister(u16 address);
     void WriteRegister(u16 address, u8 value);
     void WriteFromCPU(u16 address, u8 value);
@@ -90,7 +91,6 @@ public:
     void SetTraceLogger(TraceLogger* trace_logger);
     u16 GetWindow1Width();
     u16 GetWindow2Width();
-    HuC6202_Window_Priority* GetWindowPriorities();
     const u8* GetSourceSelection();
     HuC6202_State* GetState();
     void SaveState(std::ostream& stream);
@@ -116,7 +116,7 @@ private:
     bool m_vdc2_selected;
     bool m_irq1_1;
     bool m_irq1_2;
-    HuC6202_Window_Priority m_window_priority[4];
+    HuC6202_Window_Priority m_window_priority[4] = {};
     u8 m_source_selection[4 * 16];
 };
 

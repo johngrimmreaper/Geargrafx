@@ -36,7 +36,7 @@ public:
     virtual bool ReadSector(u32 lba, u8* buffer) override;
     virtual bool ReadSamples(u32 lba, u32 offset, s16* buffer, u32 count) override;
     virtual bool PreloadDisc() override;
-    virtual bool PreloadTrack(u32 track_number) override;
+    virtual bool PreloadTrack(u32 track_number, u32 lba) override;
 
 private:
     bool ReadTOC();
@@ -44,7 +44,7 @@ private:
     bool InitHunkCache();
     void DestroyHunkCache();
     bool LoadHunk(u32 hunk_index);
-    GG_CdRomTrackType GetTrackType(const char* type_str);
+    bool GetTrackType(const char* type_str, GG_CdRomTrackType& type);
 
 private:
     chd_file* m_chd_file;

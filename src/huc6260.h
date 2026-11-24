@@ -29,12 +29,23 @@
 #define HUC6260_HSYNC_LENGTH 237
 #define HUC6260_HSYNC_START_HPOS (HUC6260_LINE_LENGTH - HUC6260_HSYNC_LENGTH)
 #define HUC6260_HSYNC_END_HPOS 0
-#define HUC6260_VSYNC_HPOS (HUC6260_HSYNC_START_HPOS + 30)
+#define HUC6260_LASERACTIVE_WIDTH 1176
+#define HUC6260_LASERACTIVE_WIDTH_SCALE 3
+#define HUC6260_LASERACTIVE_PIXEL_WIDTH (HUC6260_LASERACTIVE_WIDTH / HUC6260_LASERACTIVE_WIDTH_SCALE)
+#define HUC6260_LASERACTIVE_DEFAULT_WIDTH 348
+#define HUC6260_LASERACTIVE_PIXEL_START ((HUC6260_LASERACTIVE_PIXEL_WIDTH - HUC6260_LASERACTIVE_DEFAULT_WIDTH) / 2)
+#define HUC6260_LASERACTIVE_PIXEL_END (HUC6260_LASERACTIVE_PIXEL_START + HUC6260_LASERACTIVE_DEFAULT_WIDTH - 1)
+#define HUC6260_LASERACTIVE_SCANLINE_START 22
+#define HUC6260_LASERACTIVE_SCANLINE_END 261
+#define HUC6260_SQUARE_PIXEL_CLOCKS 3.5f
+#define HUC6260_PIXEL_BW 0x0200
+#define HUC6260_PALETTE_SIZE 1024
 
 class HuC6202;
 class HuC6280;
 class Random;
 class TraceLogger;
+class LaserActive;
 
 class HuC6260
 {
@@ -66,11 +77,11 @@ public:
     };
 
 public:
-    HuC6260(HuC6202* huc6202, HuC6280* huc6280, Random* random);
+    HuC6260(HuC6202* huc6202, HuC6280* huc6280, Random* random, LaserActive* laseractive);
     ~HuC6260();
     void Init(GG_Pixel_Format pixel_format = GG_PIXEL_RGBA8888);
     void Reset();
-    template <bool is_sgx>
+    template <bool is_sgx, bool is_laseractive = false>
     bool Clock(u32 cycles);
     u8 ReadRegister(u16 address);
     void WriteRegister(u16 address, u8 value);
@@ -83,32 +94,56 @@ public:
     u8* GetBuffer();
     int GetCurrentWidth();
     int GetCurrentHeight();
+    void GetScreenBounds(int* start_x, int* end_x, int* start_y, int* end_y);
     int GetWidthScale();
+    float GetPixelAspectRatio();
+    bool IsScaledWidth();
+    int GetTexelClocks();
+    int GetLineClockDivider(int row);
+    float GetChromaOrigin();
+    void GetActiveRegion(int* x, int* y, int* width, int* height);
+    void GetBorderColor(u8* rgb);
+    bool IsLowPassActive();
+    bool IsBlackAndWhite();
+    void SetBlackAndWhiteEnabled(bool enabled);
     void SetScanlineStart(int scanline_start);
     void SetScanlineEnd(int scanline_end);
-    void SetOverscan(bool overscan);
+    void SetLaserActiveScanlines(int start, int end);
+    void SetLaserActivePixels(int start, int end);
+    void SetOverscan(int overscan);
     GG_Pixel_Format GetPixelFormat();
     void SetResetValue(int value);
     void SetTraceLogger(TraceLogger* trace_logger);
     void SetPalette(int palette);
-    void SetCustomPalette(const u8* data);
+    void SetCustomPalette(const u8* data, int count = 512);
     void SetLowPassFilter(bool enabled, float intensity, float cutoff_mhz, bool speed_5_36, bool speed_7_16, bool speed_10_8);
     void SaveState(std::ostream& stream);
-    void LoadState(std::istream& stream);
+    void LoadState(std::istream& stream, int version = GG_SAVESTATE_VERSION);
+    void SaveLaserActiveState(std::ostream& stream);
+    void LoadLaserActiveState(std::istream& stream);
 
 private:
     void TraceVceEvent(u8 event);
     void LogVceEvent(u8 event);
     void InitPalettes();
+    void InitGrayscalePalette(int palette);
     void AdjustForMultipleDividers();
+    template <bool is_sgx, bool is_laseractive, int divider>
+    bool ClockTemplate(u32 cycles);
     template <bool is_sgx>
     void RenderFrame();
     template <bool SGX, int BPP>
     void RenderFrameTemplate();
     void CalculateScreenBounds();
+    void ResetCrop();
+    void UpdateCropBounds();
+    void CropFrame(bool multiple_speeds);
     void SanitizeState();
+    void LatchBlackAndWhite();
     template <int BPP>
-    void ApplyLowPassFilter();
+    void ApplyLowPassFilter(u8* buffer = NULL, int width = 0, int height = 0, int speed = -1);
+    float GetLowPassAlpha(int speed);
+    void RenderLaserActiveLine(int source_y);
     u8 RGB565Component(u8 value, u16 max);
     u16 PackRGB565(u8 red, u8 green, u8 blue);
     u8 RoundToByte(float value);
@@ -118,6 +153,7 @@ private:
     HuC6280* m_huc6280;
     Random* m_random;
     TraceLogger* m_trace_logger;
+    LaserActive* m_laseractive;
     HuC6260_State m_state;
     u8 m_control_register;
     u16 m_color_table_address;
@@ -125,10 +161,13 @@ private:
     s32 m_clock_divider;
     u16 m_color_table[512] = {};
     u8* m_frame_buffer;
-    u8 m_scale_buffer[2048 * 512 * 4] = {};
+    alignas(u16) u8 m_scale_buffer[2048 * 512 * 4] = {};
     u16 m_vce_buffer_1[1024 * 512] = {};
     u16 m_vce_buffer_2[1024 * 512] = {};
-    s32 m_line_speed[242] = {};
+    s32 m_line_speed[HUC6260_LINES] = {};
+    u8 m_laseractive_classification[683 * HUC6260_LINES] = {};
+    u8 m_laseractive_output_classification[HUC6260_LASERACTIVE_WIDTH] = {};
+    u8 m_laseractive_line_state[HUC6260_LINES * 8] = {};
     bool m_multiple_speeds;
     bool m_scaled_width;
     bool m_active_line;
@@ -139,13 +178,25 @@ private:
     bool m_hsync;
     bool m_vsync;
     s32 m_blur;
-    u32 m_black_and_white;
+    u16 m_bw;
+    bool m_bw_enabled;
     int m_overscan;
+    bool m_auto_crop;
+    s32 m_crop_min;
+    s32 m_crop_max;
+    s32 m_crop_start;
+    s32 m_crop_end;
+    int m_crop_width;
+    int m_crop_offset_clocks;
     int m_scanline_start;
     int m_scanline_end;
+    int m_laseractive_scanline_start;
+    int m_laseractive_scanline_end;
+    int m_laseractive_pixel_start;
+    int m_laseractive_width;
     GG_Pixel_Format m_pixel_format;
-    u8 m_rgba888_palette[HuC6260_PALETTE_COUNT][512][4] = {};
-    u16 m_rgb565_palette[HuC6260_PALETTE_COUNT][512] = {};
+    u8 m_rgba888_palette[HuC6260_PALETTE_COUNT][HUC6260_PALETTE_SIZE][4] = {};
+    u16 m_rgb565_palette[HuC6260_PALETTE_COUNT][HUC6260_PALETTE_SIZE] = {};
     int m_reset_value;
     int m_palette;
     int m_screen_start_x;
@@ -179,6 +230,7 @@ static const int k_huc6260_line_end[2][4] = {
     { 256 + 24 + 24, 341 + 24 + 48, 512 + 24 + 96, 512 + 24 + 96 },
     { 256 + 24 + 24 + 24 - 12, 341 + 32 + 24 + 48 - 16, 512 + 48 + 24 + 96 - 24, 512 + 48 + 24 + 96 - 24 } };
 static const int k_huc6260_scaling_width[2] = { 1024, 1120 };
+static const int k_huc6260_crop_min_clocks[4] = { 256 * 4, 320 * 3, 512 * 2, 512 * 2 };
 
 static const uint8_t k_rgb888_palette_turboxray[512 * 3] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x02,

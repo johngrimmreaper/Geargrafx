@@ -44,6 +44,9 @@
 
 static bool running = true;
 static bool paused_when_focus_lost = false;
+static bool window_settings_pending = false;
+static bool window_resizable = true;
+static bool load_ffwd_active = false;
 static Uint64 mouse_last_motion_time = 0;
 static const Uint64 mouse_hide_timeout_ms = 1500;
 static SDL_DisplayID current_display_id = 0;
@@ -55,14 +58,18 @@ static void sdl_destroy(void);
 static void sdl_events(void);
 static void sdl_events_quit(const SDL_Event* event);
 static void sdl_events_app(const SDL_Event* event);
+static bool is_mouse_captured(void);
+static bool is_captured_mouse_event(const SDL_Event* event);
 static void handle_mouse_cursor(void);
 static void handle_menu(void);
+static void handle_window_resizable(void);
 static void handle_single_instance(void);
 static void run_emulator(void);
+static void update_load_ffwd(void);
+static void apply_window_settings(void);
 static void save_window_size(void);
 
 #if defined(__APPLE__)
-static void* macos_fullscreen_observer = NULL;
 static void* macos_nswindow = NULL;
 static bool macos_new_instance_enabled = false;
 extern "C" void* macos_install_fullscreen_observer(void* nswindow, void(*enter_cb)(), void(*exit_cb)());
@@ -125,8 +132,7 @@ int application_init(const ApplicationParams& params)
         return 6;
     }
 
-    if (config_emulator.fullscreen)
-        application_trigger_fullscreen(true);
+    application_apply_settings();
 
     bool rom_file_argument = IsValidPointer(params.rom_file) && (strlen(params.rom_file) > 0);
     bool symbol_file_argument = IsValidPointer(params.symbol_file) && (strlen(params.symbol_file) > 0);
@@ -146,6 +152,9 @@ int application_init(const ApplicationParams& params)
         gui_debug_load_symbols_file(params.symbol_file);
     }
 
+    if ((params.state_slot > 0) || IsValidPointer(params.state_file))
+        gui_load_state_after_media(params.state_slot, params.state_file);
+
     if (params.mcp_mode >= 0)
     {
         const char* mcp_http_address = params.mcp_http_address.empty() ? "127.0.0.1" : params.mcp_http_address.c_str();
@@ -154,8 +163,8 @@ int application_init(const ApplicationParams& params)
         else
             Log("Auto-starting MCP server (mode: http, address: %s, port: %d)...", mcp_http_address, params.mcp_tcp_port);
         config_debug.debug = true;
-        emu_set_overscan(0);
-        emu_set_scanline_start_end(0, 241);
+        emu_set_overscan(config_debug.overscan);
+        emu_set_scanline_start_end(config_debug.scanline_start, config_debug.scanline_end);
         emu_mcp_set_transport(params.mcp_mode, params.mcp_tcp_port, mcp_http_address);
         emu_mcp_start();
     }
@@ -168,13 +177,31 @@ int application_init(const ApplicationParams& params)
     return 0;
 }
 
+void application_apply_settings(void)
+{
+    if (config_emulator.allow_screensaver)
+        SDL_EnableScreenSaver();
+    else
+        SDL_DisableScreenSaver();
+
+    paused_when_focus_lost = false;
+    window_settings_pending = !config_emulator.fullscreen;
+    bool was_fullscreen = (SDL_GetWindowFlags(application_sdl_window) & SDL_WINDOW_FULLSCREEN) != 0;
+    application_trigger_fullscreen(config_emulator.fullscreen);
+
+    // Native fullscreen transitions finish asynchronously.
+    if (!was_fullscreen)
+        apply_window_settings();
+
+    display_use_vsync_if_enabled();
+}
+
 void application_destroy(void)
 {
 #if defined(__APPLE__)
     macos_remove_dock_menu();
 #endif
 
-    remove_directory_and_contents(config_temp_path);
     save_window_size();
     ogl_renderer_destroy();
     ImGui_ImplSDL3_Shutdown();
@@ -195,6 +222,7 @@ void application_mainloop(void)
         sdl_events();
         handle_mouse_cursor();
         handle_menu();
+        handle_window_resizable();
         handle_single_instance();
         run_emulator();
         display_render();
@@ -423,7 +451,7 @@ static bool sdl_init(void)
     if (nswindow)
     {
         macos_nswindow = nswindow;
-        macos_fullscreen_observer = macos_install_fullscreen_observer(nswindow, on_enter_fullscreen, on_exit_fullscreen);
+        macos_install_fullscreen_observer(nswindow, on_enter_fullscreen, on_exit_fullscreen);
     }
 
     if (macos_new_instance_enabled)
@@ -448,9 +476,26 @@ static void sdl_destroy(void)
     SDL_Quit();
 }
 
+static bool is_mouse_captured(void)
+{
+    return config_emulator.capture_mouse && !ImGui::IsPopupOpen(NULL, ImGuiPopupFlags_AnyPopup);
+}
+
+static bool is_captured_mouse_event(const SDL_Event* event)
+{
+    if (!is_mouse_captured())
+        return false;
+
+    if (event->type != SDL_EVENT_MOUSE_MOTION && event->type != SDL_EVENT_MOUSE_WHEEL &&
+        event->type != SDL_EVENT_MOUSE_BUTTON_DOWN)
+        return false;
+
+    return SDL_GetWindowFromEvent(event) == application_sdl_window;
+}
+
 static void handle_mouse_cursor(void)
 {
-    if (!config_debug.debug && gui_main_window_hovered)
+    if (!config_debug.debug && gui_main_window_hovered && !gui_has_open_window())
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     else if (!config_debug.debug && config_emulator.fullscreen && !config_emulator.always_show_menu)
     {
@@ -464,7 +509,12 @@ static void handle_mouse_cursor(void)
     else
         ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
 
-    SDL_SetWindowRelativeMouseMode(application_sdl_window, config_emulator.capture_mouse);
+    bool mouse_captured = is_mouse_captured();
+
+    if (mouse_captured && !SDL_GetWindowRelativeMouseMode(application_sdl_window))
+        ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+
+    SDL_SetWindowRelativeMouseMode(application_sdl_window, mouse_captured);
 }
 
 static void handle_menu(void)
@@ -477,6 +527,17 @@ static void handle_menu(void)
         application_show_menu = config_emulator.always_show_menu;
     else
         application_show_menu = true;
+}
+
+static void handle_window_resizable(void)
+{
+    bool resizable = !emu_is_video_recording();
+
+    if (resizable == window_resizable)
+        return;
+
+    window_resizable = resizable;
+    SDL_SetWindowResizable(application_sdl_window, resizable);
 }
 
 static void handle_single_instance(void)
@@ -514,7 +575,7 @@ static void sdl_events(void)
         {
             sdl_events_app(&event);
 
-            if (!file_dialog_active)
+            if (!file_dialog_active && !is_captured_mouse_event(&event))
                 ImGui_ImplSDL3_ProcessEvent(&event);
 
             if (!file_dialog_active && !ImGui::GetIO().WantCaptureKeyboard)
@@ -555,18 +616,26 @@ static void sdl_events_app(const SDL_Event* event)
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
         {
             display_use_vsync_if_enabled();
-            if (config_emulator.pause_when_inactive && !emu_turbolink_is_active() && !paused_when_focus_lost)
+            if (config_emulator.pause_when_inactive && !emu_turbolink_is_active() && !emu_mcp_is_running() &&
+                !paused_when_focus_lost)
                 emu_resume();
             break;
         }
         case SDL_EVENT_WINDOW_FOCUS_LOST:
         {
             display_disable_vsync();
-            if (config_emulator.pause_when_inactive && !emu_turbolink_is_active())
+            if (config_emulator.pause_when_inactive && !emu_turbolink_is_active() && !emu_mcp_is_running())
             {
                 paused_when_focus_lost = emu_is_paused();
                 emu_pause();
             }
+            break;
+        }
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+        case SDL_EVENT_WINDOW_RESTORED:
+        {
+            if (event->window.windowID == SDL_GetWindowID(application_sdl_window))
+                apply_window_settings();
             break;
         }
         case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
@@ -579,10 +648,7 @@ static void sdl_events_app(const SDL_Event* event)
                 if (config_video.sync_mode != config_VideoSync_Disabled && !display_is_vsync_forced_off())
                     display_recreate_gl_context();
                 else
-                {
-                    display_request_gl_context_recreate();
                     display_update_frame_pacing();
-                }
             }
             break;
         }
@@ -619,17 +685,77 @@ static void run_emulator(void)
     events_apply_input();
 
     config_emulator.paused = emu_is_paused();
-    emu_audio_sync = config_audio.sync;
+    emu_audio_sync = config_audio.sync && !emu_is_load_ffwd();
+    emu_audio_rate_control = display_is_vsync_pacing();
+    emu_audio_ratio = display_get_audio_ratio();
     emu_update();
 
+    if (display_should_run_catch_up_frame())
+        emu_update();
+
     events_reset_input();
+    update_load_ffwd();
 
     display_update_vsync_state();
 }
 
+static void update_load_ffwd(void)
+{
+    bool active = emu_is_load_ffwd();
+
+    if (active == load_ffwd_active)
+        return;
+
+    load_ffwd_active = active;
+
+    if (config_emulator.ffwd)
+        return;
+
+    if (active)
+        display_disable_vsync();
+    else
+        display_use_vsync_if_enabled();
+}
+
+static void apply_window_settings(void)
+{
+    if (!window_settings_pending)
+        return;
+
+    SDL_WindowFlags flags = SDL_GetWindowFlags(application_sdl_window);
+    if (flags & SDL_WINDOW_FULLSCREEN)
+        return;
+
+    if (config_emulator.maximized)
+    {
+        window_settings_pending = false;
+        SDL_MaximizeWindow(application_sdl_window);
+        SDL_ERROR("SDL_MaximizeWindow");
+        return;
+    }
+
+    if (flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED))
+    {
+        if (!SDL_RestoreWindow(application_sdl_window))
+        {
+            SDL_ERROR("SDL_RestoreWindow");
+            window_settings_pending = false;
+        }
+        return;
+    }
+
+    window_settings_pending = false;
+    float content_scale = SDL_GetDisplayContentScale(SDL_GetDisplayForWindow(application_sdl_window));
+    if (content_scale <= 0.0f)
+        content_scale = 1.0f;
+    SDL_SetWindowSize(application_sdl_window, (int)(config_emulator.window_width * content_scale),
+        (int)(config_emulator.window_height * content_scale));
+    SDL_ERROR("SDL_SetWindowSize");
+}
+
 static void save_window_size(void)
 {
-    if (!config_emulator.fullscreen)
+    if (!config_emulator.fullscreen && !window_settings_pending)
     {
         int width, height;
         SDL_GetWindowSize(application_sdl_window, &width, &height);

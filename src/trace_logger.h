@@ -51,7 +51,6 @@ enum GG_Trace_Type : u8
 #define TRACE_FLAG_VCE          (1 << TRACE_VCE)
 #define TRACE_FLAG_SCSI         (1 << TRACE_SCSI)
 #define TRACE_FLAG_SYSTEM       (1 << TRACE_SYSTEM)
-#define TRACE_FLAG_ALL          ((1U << TRACE_TYPE_COUNT) - 1)
 
 static_assert(TRACE_TYPE_COUNT < 32, "Trace category flags exceed u32 width");
 
@@ -67,6 +66,9 @@ enum GG_Trace_VDC_Event : u8
     TRACE_VDC_VRAM_DMA_START,
     TRACE_VDC_SATB_DMA_START,
     TRACE_VDC_VPC_REG_WRITE,
+    TRACE_VDC_SPRITE_BUDGET,
+    TRACE_VDC_SPRITE_LIMIT,
+    TRACE_VDC_MISSED_VBLANK,
 };
 
 enum GG_Trace_VCE_Event : u8
@@ -182,7 +184,7 @@ enum GG_Trace_System_Event : u8
     TRACE_SYSTEM_IRQ_ACK,
 };
 
-static_assert(TRACE_VDC_VPC_REG_WRITE < 32 && TRACE_VCE_VSYNC_END < 32 &&
+static_assert(TRACE_VDC_MISSED_VBLANK < 32 && TRACE_VCE_VSYNC_END < 32 &&
     TRACE_INPUT_TURBOLINK_CABLE < 32 && TRACE_TIMER_CONTROL_WRITE < 32 &&
     TRACE_ADPCM_END_IRQ < 32 && TRACE_CDROM_AUDIO_PLAYBACK_START < 32 &&
     TRACE_SCSI_SECTOR_RETRY < 32 && TRACE_PSG_LFO_CONTROL < 32 &&
@@ -198,8 +200,15 @@ static_assert(TRACE_VDC_VPC_REG_WRITE < 32 && TRACE_VCE_VSYNC_END < 32 &&
 #define TRACE_VDC_FILTER_DMA                  \
     (TRACE_EVENT_FLAG(TRACE_VDC_SATB_DMA_END_IRQ) | TRACE_EVENT_FLAG(TRACE_VDC_VRAM_DMA_END_IRQ) | \
      TRACE_EVENT_FLAG(TRACE_VDC_VRAM_DMA_START) | TRACE_EVENT_FLAG(TRACE_VDC_SATB_DMA_START))
-#define TRACE_VDC_FILTER_ALL                  \
+#define TRACE_VDC_FILTER_SPRITE_BUDGET        TRACE_EVENT_FLAG(TRACE_VDC_SPRITE_BUDGET)
+#define TRACE_VDC_FILTER_SPRITE_LIMIT         TRACE_EVENT_FLAG(TRACE_VDC_SPRITE_LIMIT)
+#define TRACE_VDC_FILTER_SPRITES              \
+    (TRACE_VDC_FILTER_SPRITE_BUDGET | TRACE_VDC_FILTER_SPRITE_LIMIT)
+#define TRACE_VDC_FILTER_MISSED_VBLANK           TRACE_EVENT_FLAG(TRACE_VDC_MISSED_VBLANK)
+#define TRACE_VDC_FILTER_DEFAULT              \
     (TRACE_VDC_FILTER_REGISTERS | TRACE_VDC_FILTER_IRQS | TRACE_VDC_FILTER_DMA)
+#define TRACE_VDC_FILTER_ALL                  \
+    (TRACE_VDC_FILTER_DEFAULT | TRACE_VDC_FILTER_SPRITES | TRACE_VDC_FILTER_MISSED_VBLANK)
 
 #define TRACE_VCE_FILTER_REGISTERS            \
     (TRACE_EVENT_FLAG(TRACE_VCE_CONTROL_WRITE) | TRACE_EVENT_FLAG(TRACE_VCE_COLOR_WRITE))
@@ -362,6 +371,7 @@ struct GG_Trace_Entry
         struct
         {
             u32 length;
+            float clock_speed;
             u16 address;
             u8 reg;
             u8 value;
@@ -419,10 +429,8 @@ public:
     void SetEventFilter(GG_Trace_Type type, u32 filter);
     u32 GetEnabledFlags() const;
     u32 GetEventFilter(GG_Trace_Type type) const;
-    const GG_Trace_Entry* GetBuffer() const;
     u32 GetCount() const;
     u32 GetCapacity() const;
-    u32 GetPosition() const;
     u64 GetTotalLogged() const;
     u64 GetSequence() const;
     const GG_Trace_Entry& GetEntry(u32 index) const;

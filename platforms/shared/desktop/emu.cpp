@@ -22,11 +22,14 @@
 #include <thread>
 #include <atomic>
 #include <string.h>
+#include <math.h>
 #include "geargrafx.h"
 #include "sound_queue.h"
 #include "config.h"
 #include "rewind.h"
 #include "runahead.h"
+#include "video_recorder.h"
+#include "ogl_renderer.h"
 #include "events.h"
 #include "gui_debug_trace_logger.h"
 #include "mcp/mcp_manager.h"
@@ -43,7 +46,6 @@
 
 static GeargrafxCore* geargrafx;
 static s16* audio_buffer;
-static bool audio_enabled;
 static McpManager* mcp_manager;
 static TurboLinkManager* turbolink_manager;
 static bool turbolink_hardware_applied;
@@ -52,6 +54,9 @@ static bool turbolink_peripherals_locked;
 static u64 turbolink_last_safe_tick;
 static Uint64 rewind_last_counter = 0;
 static double rewind_pop_accumulator = 0.0;
+static bool video_recording_output = false;
+static bool ffwd_loads = false;
+static bool load_ffwd = false;
 
 enum Loading_State
 {
@@ -86,6 +91,7 @@ static void update_debug(void);
 static void update_debug_background(void);
 static void update_debug_sprites(void);
 static void update_debug_tiles(void);
+static void get_video_recording_size(const GG_Runtime_Info& runtime, int* width, int* height);
 static void reset_rewind_timing(void);
 static int get_rewind_pop_budget(void);
 static void turbolink_publish_callback(u64 tick, u8 drive_mask, u8 value_mask, void* user_data);
@@ -102,7 +108,7 @@ static void stop_physical_cdrom_after_error(void);
 
 bool emu_init(GG_Input_Pump_Fn input_pump_fn)
 {
-    emu_frame_buffer = new u8[2048 * 256 * 4];
+    emu_frame_buffer = new u8[2048 * 512 * 4];
     audio_buffer = new s16[GG_AUDIO_BUFFER_SIZE];
 
     init_debug();
@@ -126,14 +132,16 @@ bool emu_init(GG_Input_Pump_Fn input_pump_fn)
     for (int i = 0; i < 5; i++)
         InitPointer(emu_savestates_screenshots[i].data);
 
-    audio_enabled = true;
     emu_audio_sync = true;
+    emu_audio_rate_control = false;
+    emu_audio_ratio = 1.0f;
     emu_debug_disable_breakpoints = false;
     emu_debug_irq_breakpoints = false;
     emu_debug_command = Debug_Command_None;
     emu_debug_pc_changed = false;
     emu_debug_step_frames_pending = 0;
     emu_frame_counter = 0;
+    emu_video_frame_counter = 0;
 
     mcp_manager = new McpManager();
     mcp_manager->Init(geargrafx);
@@ -153,6 +161,7 @@ void emu_destroy(void)
     }
     loading_state.store(Loading_State_None);
 
+    emu_stop_video_recording();
     save_ram();
     save_mb128();
     rewind_destroy();
@@ -192,8 +201,9 @@ void emu_load_media_async(const char* file_path)
     if (loading_state.load() != Loading_State_None)
         return;
 
-    gui_debug_trace_logger_reset();
+    gui_debug_trace_logger_reset("media_change");
     emu_debug_command = Debug_Command_None;
+    emu_reset_load_ffwd();
     reset_buffers();
 
     save_ram();
@@ -221,9 +231,10 @@ void emu_load_physical_cdrom_async(const char* device_id)
         return;
     }
 
-    gui_debug_trace_logger_reset();
+    gui_debug_trace_logger_reset("media_change");
     Log("Queueing physical CD-ROM async load: %s", device_id);
     emu_debug_command = Debug_Command_None;
+    emu_reset_load_ffwd();
     reset_buffers();
 
     save_ram();
@@ -324,6 +335,7 @@ void emu_update(void)
         {
             if (!rewind_pop())
                 break;
+            emu_video_frame_counter++;
         }
 
         int silence_count = GG_AUDIO_QUEUE_SIZE;
@@ -391,7 +403,10 @@ void emu_update(void)
             if (runahead > 0)
                 runahead_run(runahead, emu_frame_buffer, audio_buffer, &sampleCount);
             else
+            {
                 geargrafx->RunToVBlank(emu_frame_buffer, audio_buffer, &sampleCount);
+                emu_update_load_ffwd();
+            }
 
             frame_executed = true;
             frame_completed = true;
@@ -409,16 +424,34 @@ void emu_update(void)
     if (frame_executed)
     {
         if (frame_completed)
+        {
             emu_frame_counter++;
+            emu_video_frame_counter++;
+        }
         if (!emu_turbolink_is_active())
             rewind_push();
+        if (video_recorder_is_recording())
+        {
+            video_recorder_add_audio(audio_buffer, sampleCount);
+            if (frame_completed)
+            {
+                if (video_recording_output)
+                    emu_video_recording_frame_pending = true;
+                else
+                {
+                    GG_Runtime_Info runtime;
+                    emu_get_runtime(runtime);
+                    video_recorder_add_video(emu_frame_buffer, runtime.screen_width, runtime.screen_height, 4);
+                }
+            }
+        }
     }
 
     if ((sampleCount > 0) && !geargrafx->IsPaused())
     {
         bool cable_connected = emu_turbolink_is_cable_connected();
         bool sync_audio = emu_audio_sync && (!cable_connected || turbolink_manager->IsPacingPeer());
-        sound_queue_write(audio_buffer, sampleCount, sync_audio);
+        sound_queue_write(audio_buffer, sampleCount, sync_audio, emu_audio_rate_control, emu_audio_ratio, !emu_audio_sync);
     }
     else if (geargrafx->IsPaused())
     {
@@ -478,7 +511,7 @@ static bool unload_physical_cdrom(char* device_id, size_t device_id_size)
     if (IsValidPointer(device_id) && (device_id_size > 0))
         strncpy_fit(device_id, geargrafx->GetMedia()->GetPhysicalCdRomDeviceId(), device_id_size);
 
-    gui_debug_trace_logger_reset();
+    gui_debug_trace_logger_reset("media_change");
 
     emu_debug_command = Debug_Command_None;
     reset_buffers();
@@ -546,18 +579,25 @@ bool emu_is_empty(void)
     return !geargrafx->GetMedia()->IsReady();
 }
 
-void emu_reset(void)
+void emu_save_persistent_data(void)
 {
-    gui_debug_trace_logger_reset();
+    save_ram();
+    save_mb128();
+}
+
+void emu_reset(bool save_persistent_data)
+{
+    gui_debug_trace_logger_reset("reset");
     emu_debug_command = Debug_Command_None;
     emu_debug_step_frames_pending = 0;
     emu_debug_pc_changed = true;
     emu_frame_counter = 0;
+    emu_reset_load_ffwd();
     reset_buffers();
     reset_rewind_timing();
     emu_audio_reset();
-    save_ram();
-    save_mb128();
+    if (save_persistent_data)
+        emu_save_persistent_data();
     geargrafx->ResetMedia(false);
     load_ram();
     load_mb128();
@@ -599,14 +639,18 @@ bool emu_eject_physical_cdrom(void)
     #endif
 }
 
-void emu_audio_huc6280a(bool enabled)
+void emu_audio_adpcm_clock_speed(int mode, float clock_speed)
 {
-    geargrafx->GetAudio()->GetPSG()->EnableHuC6280A(enabled);
+    geargrafx->SetADPCMClockSpeed(mode == 0 ? 0.0f : clock_speed);
+}
+
+void emu_audio_psg_revision(int revision)
+{
+    geargrafx->SetPSGRevision((GG_PSG_Revision)revision);
 }
 
 void emu_audio_mute(bool mute)
 {
-    audio_enabled = !mute;
     geargrafx->GetAudio()->Mute(mute);
 }
 
@@ -632,13 +676,16 @@ void emu_audio_cdrom_volume(float volume)
 
 void emu_audio_reset(void)
 {
-    sound_queue_stop();
-    sound_queue_start(GG_AUDIO_SAMPLE_RATE, 2, GG_AUDIO_QUEUE_SIZE, config_audio.buffer_count);
+    if (sound_queue_is_open())
+        sound_queue_flush();
+    else
+        emu_audio_restart();
 }
 
-bool emu_is_audio_enabled(void)
+void emu_audio_restart(void)
 {
-    return audio_enabled;
+    sound_queue_stop();
+    sound_queue_start(GG_AUDIO_SAMPLE_RATE, 2, GG_AUDIO_QUEUE_SIZE, config_audio.buffer_count);
 }
 
 bool emu_is_audio_open(void)
@@ -657,52 +704,62 @@ void emu_load_ram(const char* file_path)
     if (!emu_is_empty())
     {
         save_ram();
-        gui_debug_trace_logger_reset();
+        gui_debug_trace_logger_reset("media_change");
         geargrafx->ResetMedia(false);
         geargrafx->LoadRam(file_path, true);
         rewind_reset();
     }
 }
 
-void emu_save_state_slot(int index)
+bool emu_save_state_slot(int index)
 {
-    if (!emu_is_empty())
-    {
-        const char* dir = get_configurated_dir(config_emulator.savestates_dir_option, config_emulator.savestates_path.c_str());
-        geargrafx->SaveState(dir, index, true);
-        update_savestates_data();
-    }
+    if (emu_is_empty())
+        return false;
+
+    const char* dir = get_configurated_dir(config_emulator.savestates_dir_option, config_emulator.savestates_path.c_str());
+    bool saved = geargrafx->SaveState(dir, index, true);
+    update_savestates_data();
+    return saved;
 }
 
-void emu_load_state_slot(int index)
+bool emu_load_state_slot(int index)
 {
-    if (!emu_is_empty() && !emu_turbolink_is_active())
-    {
-        const char* dir = get_configurated_dir(config_emulator.savestates_dir_option, config_emulator.savestates_path.c_str());
-        if (geargrafx->LoadState(dir, index))
-        {
-            events_sync_input();
-            rewind_reset();
-        }
-    }
+    if (emu_is_empty() || emu_turbolink_is_active())
+        return false;
+
+    const char* dir = get_configurated_dir(config_emulator.savestates_dir_option, config_emulator.savestates_path.c_str());
+
+    if (!geargrafx->LoadState(dir, index))
+        return false;
+
+    emu_debug_state_restored();
+    events_sync_input();
+    emu_reset_load_ffwd();
+    rewind_reset();
+    return true;
 }
 
-void emu_save_state_file(const char* file_path)
+bool emu_save_state_file(const char* file_path)
 {
-    if (!emu_is_empty())
-        geargrafx->SaveState(file_path, -1, true);
+    if (emu_is_empty())
+        return false;
+
+    return geargrafx->SaveState(file_path, -1, true);
 }
 
-void emu_load_state_file(const char* file_path)
+bool emu_load_state_file(const char* file_path)
 {
-    if (!emu_is_empty() && !emu_turbolink_is_active())
-    {
-        if (geargrafx->LoadState(file_path))
-        {
-            events_sync_input();
-            rewind_reset();
-        }
-    }
+    if (emu_is_empty() || emu_turbolink_is_active())
+        return false;
+
+    if (!geargrafx->LoadState(file_path))
+        return false;
+
+    emu_debug_state_restored();
+    events_sync_input();
+    emu_reset_load_ffwd();
+    rewind_reset();
+    return true;
 }
 
 void update_savestates_data(void)
@@ -730,11 +787,31 @@ void update_savestates_data(void)
         {
             emu_savestates_screenshots[i].data = new u8[emu_savestates[i].screenshot_size];
             emu_savestates_screenshots[i].size = emu_savestates[i].screenshot_size;
-            geargrafx->GetSaveStateScreenshot(i + 1, dir, &emu_savestates_screenshots[i]);
+            bool loaded = geargrafx->GetSaveStateScreenshot(i + 1, dir, &emu_savestates_screenshots[i]);
+            size_t expected_size = (size_t)emu_savestates_screenshots[i].width * emu_savestates_screenshots[i].height * 4;
+
+            if (!loaded || (emu_savestates_screenshots[i].size != expected_size))
+                SafeDeleteArray(emu_savestates_screenshots[i].data);
         }
     }
 }
 
+
+bool emu_add_cheat(const char* cheat)
+{
+    if (emu_is_media_loading())
+        return false;
+
+    return geargrafx->SetCheat(cheat);
+}
+
+void emu_clear_cheats(void)
+{
+    if (emu_is_media_loading())
+        return;
+
+    geargrafx->ClearCheats();
+}
 
 void emu_get_runtime(GG_Runtime_Info& runtime)
 {
@@ -777,6 +854,14 @@ void emu_get_info(char* info, int buffer_size)
 GeargrafxCore* emu_get_core(void)
 {
     return geargrafx;
+}
+
+void emu_debug_state_restored(void)
+{
+    emu_get_core()->GetHuC6280()->ResetDebuggerExecutionState();
+    emu_debug_command = Debug_Command_None;
+    emu_debug_step_frames_pending = 0;
+    emu_debug_pc_changed = true;
 }
 
 void emu_debug_step_over(void)
@@ -869,9 +954,14 @@ void emu_set_palette(int palette)
     geargrafx->GetHuC6260()->SetPalette(palette);
 }
 
-void emu_set_custom_palette(const u8* data)
+void emu_set_custom_palette(const u8* data, int count)
 {
-    geargrafx->GetHuC6260()->SetCustomPalette(data);
+    geargrafx->GetHuC6260()->SetCustomPalette(data, count);
+}
+
+void emu_set_black_and_white(bool enabled)
+{
+    geargrafx->GetHuC6260()->SetBlackAndWhiteEnabled(enabled);
 }
 
 void emu_video_no_sprite_limit(bool enabled)
@@ -888,13 +978,44 @@ void emu_set_safe_vdc_defaults(bool enabled)
 
 void emu_set_overscan(int overscan)
 {
-    geargrafx->GetHuC6260()->SetOverscan(overscan == 0 ? false : true);
+    geargrafx->GetHuC6260()->SetOverscan(overscan);
 }
 
 void emu_set_scanline_start_end(int start, int end)
 {
     geargrafx->GetHuC6260()->SetScanlineStart(start);
     geargrafx->GetHuC6260()->SetScanlineEnd(end);
+}
+
+void emu_set_laseractive_scanlines(int mode, int start, int end)
+{
+    if (mode == 0)
+    {
+        start = HUC6260_LASERACTIVE_SCANLINE_START;
+        end = HUC6260_LASERACTIVE_SCANLINE_END;
+    }
+    else if (mode == 1)
+    {
+        start = 0;
+        end = HUC6260_LINES - 1;
+    }
+    geargrafx->GetHuC6260()->SetLaserActiveScanlines(start, end);
+}
+
+void emu_set_laseractive_pixels(int mode, int start, int end)
+{
+    if (mode == 0)
+    {
+        start = HUC6260_LASERACTIVE_PIXEL_START;
+        end = HUC6260_LASERACTIVE_PIXEL_END;
+    }
+    else if (mode == 1)
+    {
+        start = 0;
+        end = HUC6260_LASERACTIVE_PIXEL_WIDTH - 1;
+    }
+
+    geargrafx->GetHuC6260()->SetLaserActivePixels(start, end);
 }
 
 void emu_set_lowpass_filter(bool enabled, float intensity, float cutoff_mhz, bool speed_5_36, bool speed_7_16, bool speed_10_8)
@@ -921,14 +1042,59 @@ void emu_set_console_type(GG_Console_Type console_type)
 {
     geargrafx->GetMedia()->SetConsoleType(console_type);
 }
+
+void emu_set_cpu_overclock(int percent)
+{
+    geargrafx->GetHuC6280()->SetOverclock(percent);
+}
+
 void emu_set_cdrom_type(GG_CDROM_Type cdrom_type)
 {
     geargrafx->GetMedia()->SetCDROMType(cdrom_type);
 }
 
+void emu_set_cdrom_speed(int speed_index)
+{
+    static const int speeds[] = { 1, 2, 3, 4, 6 };
+    geargrafx->GetScsiController()->SetReadSpeed(speeds[CLAMP(speed_index, 0, 4)]);
+}
+
 void emu_set_preload_cdrom(bool enabled)
 {
     geargrafx->GetMedia()->PreloadCdRom(enabled);
+}
+
+void emu_set_ffwd_loads(bool enabled)
+{
+    ffwd_loads = enabled;
+    emu_reset_load_ffwd();
+}
+
+void emu_reset_load_ffwd(void)
+{
+    load_ffwd = false;
+
+    if (IsValidPointer(geargrafx))
+        geargrafx->ResetLoadDetection();
+}
+
+void emu_update_load_ffwd(void)
+{
+    bool active = emu_is_load_ffwd();
+    load_ffwd = ffwd_loads && geargrafx->UpdateLoadDetection();
+
+    if (active && !load_ffwd && !config_emulator.ffwd)
+        emu_audio_reset();
+}
+
+bool emu_is_load_ffwd(void)
+{
+    return load_ffwd && !config_debug.debug && !rewind_is_active() && !emu_is_paused() && !emu_turbolink_is_active();
+}
+
+bool emu_is_ffwd(void)
+{
+    return config_emulator.ffwd || emu_is_load_ffwd();
 }
 
 void emu_set_backup_ram(bool enabled)
@@ -994,17 +1160,20 @@ void emu_set_turbo_speed(GG_Controllers controller, GG_Keys button, u8 speed)
     geargrafx->GetInput()->SetTurboSpeed(controller, button, speed);
 }
 
-void emu_save_screenshot(const char* file_path)
+bool emu_save_screenshot(const char* file_path)
 {
     if (!geargrafx->GetMedia()->IsReady())
-        return;
+        return false;
 
     GG_Runtime_Info runtime;
     emu_get_runtime(runtime);
 
-    stbi_write_png(file_path, runtime.screen_width, runtime.screen_height, 4, emu_frame_buffer, runtime.screen_width * 4);
+    if (!stbi_write_png(file_path, runtime.screen_width, runtime.screen_height, 4, emu_frame_buffer,
+        runtime.screen_width * 4))
+        return false;
 
     Log("Screenshot saved to %s", file_path);
+    return true;
 }
 
 int emu_get_screenshot_png(unsigned char** out_buffer)
@@ -1048,10 +1217,10 @@ int emu_get_sprite_png(int vdc, int sprite_index, unsigned char** out_buffer)
     return len;
 }
 
-void emu_save_sprite(const char* file_path, int vdc, int index)
+bool emu_save_sprite(const char* file_path, int vdc, int index)
 {
     if (!geargrafx->GetMedia()->IsReady())
-        return;
+        return false;
 
     update_debug_sprites();
 
@@ -1059,15 +1228,17 @@ void emu_save_sprite(const char* file_path, int vdc, int index)
     int height = emu_debug_sprite_heights[vdc][index];
     u8* buffer = emu_debug_sprite_buffers[vdc][index];
 
-    stbi_write_png(file_path, width, height, 4, buffer, width * 4);
+    if (!stbi_write_png(file_path, width, height, 4, buffer, width * 4))
+        return false;
 
     Log("Sprite saved to %s", file_path);
+    return true;
 }
 
-void emu_save_background(const char* file_path, int vdc)
+bool emu_save_background(const char* file_path, int vdc)
 {
     if (!geargrafx->GetMedia()->IsReady())
-        return;
+        return false;
 
     update_debug_background();
 
@@ -1075,14 +1246,26 @@ void emu_save_background(const char* file_path, int vdc)
     int height = emu_debug_background_buffer_height[vdc];
     u8* buffer = emu_debug_background_buffer[vdc];
 
-    stbi_write_png(file_path, width, height, 4, buffer, width * 4);
+    if (!stbi_write_png(file_path, width, height, 4, buffer, width * 4))
+        return false;
 
     Log("Background saved to %s", file_path);
+    return true;
 }
 
 bool emu_load_bios(const char* file_path, bool syscard)
 {
     return geargrafx->LoadBios(file_path, syscard);
+}
+
+bool emu_load_pac_bios(const char* file_path, GG_LaserActive_Region region)
+{
+    return geargrafx->LoadPacBios(file_path, region);
+}
+
+void emu_set_laseractive_region(GG_LaserActive_Region region)
+{
+    geargrafx->SetLaserActiveRegion(region);
 }
 
 static void save_ram(void)
@@ -1141,6 +1324,10 @@ static void reset_buffers(void)
             emu_debug_sprite_heights[i][s] = 16;
         }
 
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < EMU_DEBUG_SPRITE_LAYER_WIDTH * EMU_DEBUG_SPRITE_LAYER_HEIGHT * 4; j++)
+            emu_debug_sprite_layer_buffer[i][j] = 0;
+
     int tile_buf_size = 32 * 8 * 64 * 8 * 4;
     for (int i = 0; i < tile_buf_size; i++)
         emu_debug_tiles_buffer[0][i] = 0;
@@ -1184,6 +1371,14 @@ static void init_debug(void)
                 emu_debug_sprite_buffers[i][s][j] = 0;
         }
 
+    for (int i = 0; i < 2; i++)
+    {
+        emu_debug_sprite_layer_buffer[i] = new u8[EMU_DEBUG_SPRITE_LAYER_WIDTH * EMU_DEBUG_SPRITE_LAYER_HEIGHT * 4];
+        for (int j = 0; j < EMU_DEBUG_SPRITE_LAYER_WIDTH * EMU_DEBUG_SPRITE_LAYER_HEIGHT * 4; j++)
+            emu_debug_sprite_layer_buffer[i][j] = 0;
+        emu_debug_sprite_layer_enabled[i] = false;
+    }
+
     int tile_buf_size = 32 * 8 * 64 * 8 * 4;
     emu_debug_tiles_buffer[0] = new u8[tile_buf_size];
     for (int i = 0; i < tile_buf_size; i++)
@@ -1205,6 +1400,9 @@ static void destroy_debug(void)
     for (int i = 0; i < 2; i++)
         for (int s = 0; s < 64; s++)
             SafeDeleteArray(emu_debug_sprite_buffers[i][s]);
+
+    SafeDeleteArray(emu_debug_sprite_layer_buffer[0]);
+    SafeDeleteArray(emu_debug_sprite_layer_buffer[1]);
 
     SafeDeleteArray(emu_debug_tiles_buffer[0]);
     SafeDeleteArray(emu_debug_tiles_buffer[1]);
@@ -1296,10 +1494,17 @@ static void update_debug_sprites(void)
         u16* vram = huc6270->GetVRAM();
         u16* sat = huc6270->GetSAT();
         u16* color_table = huc6260->GetColorTable();
+        bool layer = emu_debug_sprite_layer_enabled[vdc];
+        u8* layer_buffer = emu_debug_sprite_layer_buffer[vdc];
 
-        for (int i = 0; i < 64; i++)
+        if (layer)
+            memset(layer_buffer, 0, EMU_DEBUG_SPRITE_LAYER_WIDTH * EMU_DEBUG_SPRITE_LAYER_HEIGHT * 4);
+
+        for (int i = 63; i >= 0; i--)
         {
             int sprite_offset = i << 2;
+            int sprite_x = sat[sprite_offset + 1] & 0x3FF;
+            int sprite_y = sat[sprite_offset] & 0x3FF;
             u16 flags = sat[sprite_offset + 3] & 0xB98F;
             bool x_flip = (flags & 0x0800);
             bool y_flip = (flags & 0x8000);
@@ -1353,6 +1558,20 @@ static void update_debug_sprites(void)
                         red = 255;
                         green = 0;
                         blue = 255;
+                    }
+                    else if (layer)
+                    {
+                        int layer_x = sprite_x + x;
+                        int layer_y = sprite_y + y;
+
+                        if ((layer_x < EMU_DEBUG_SPRITE_LAYER_WIDTH) && (layer_y < EMU_DEBUG_SPRITE_LAYER_HEIGHT))
+                        {
+                            int layer_index = ((layer_y * EMU_DEBUG_SPRITE_LAYER_WIDTH) + layer_x) << 2;
+                            layer_buffer[layer_index + 0] = red;
+                            layer_buffer[layer_index + 1] = green;
+                            layer_buffer[layer_index + 2] = blue;
+                            layer_buffer[layer_index + 3] = 255;
+                        }
                     }
 
                     int pixel_index = ((y * width) + x) << 2;
@@ -1429,10 +1648,10 @@ static void update_debug_tiles(void)
     }
 }
 
-void emu_start_vgm_recording(const char* file_path)
+bool emu_start_vgm_recording(const char* file_path)
 {
     if (!geargrafx->GetMedia()->IsReady())
-        return;
+        return false;
 
     if (geargrafx->GetAudio()->IsVgmRecording())
     {
@@ -1446,16 +1665,17 @@ void emu_start_vgm_recording(const char* file_path)
     metadata.system_name = "NEC PC Engine / TurboGrafx-16";
     if (media->IsSGX())
         metadata.system_name = "NEC PC Engine SuperGrafx";
-    else if (media->IsCDROM())
+    else if (media->IsCDROMHardwareEnabled())
         metadata.system_name = "NEC PC Engine CD-ROM";
 
     metadata.game_name = media->IsInGameDatabase() ? media->GetGameDatabaseName() : media->GetFileName();
     metadata.comment = "Created with " GG_TITLE " " GG_VERSION;
 
-    if (geargrafx->GetAudio()->StartVgmRecording(file_path, clock_rate, metadata))
-    {
-        Log("VGM recording started: %s", file_path);
-    }
+    if (!geargrafx->GetAudio()->StartVgmRecording(file_path, clock_rate, metadata))
+        return false;
+
+    Log("VGM recording started: %s", file_path);
+    return true;
 }
 
 void emu_stop_vgm_recording(void)
@@ -1470,6 +1690,87 @@ void emu_stop_vgm_recording(void)
 bool emu_is_vgm_recording(void)
 {
     return geargrafx->GetAudio()->IsVgmRecording();
+}
+
+bool emu_start_video_recording(const char* file_path)
+{
+    if (!geargrafx->GetMedia()->IsReady())
+        return false;
+
+    if (video_recorder_is_recording())
+        emu_stop_video_recording();
+
+    GG_Runtime_Info runtime;
+    emu_get_runtime(runtime);
+
+    int width = 0;
+    int height = 0;
+    video_recording_output = ogl_renderer_get_output_size(&width, &height) && (width > 1) && (height > 1);
+    emu_video_recording_frame_pending = false;
+
+    if (video_recording_output)
+    {
+        width &= ~1;
+        height &= ~1;
+    }
+    else
+        get_video_recording_size(runtime, &width, &height);
+
+    if (!video_recorder_start(file_path, width, height, emu_get_frame_rate(), GG_AUDIO_SAMPLE_RATE, (Video_Recorder_Quality)config_video.recording_quality))
+        return false;
+
+    Log("Video recording started: %s (%dx%d%s)", file_path, width, height, video_recording_output ? ", shader output" : "");
+    return true;
+}
+
+void emu_stop_video_recording(void)
+{
+    if (video_recorder_is_recording())
+    {
+        video_recorder_stop();
+        Log("Video recording stopped");
+    }
+}
+
+bool emu_is_video_recording(void)
+{
+    return video_recorder_is_recording();
+}
+
+static void get_video_recording_size(const GG_Runtime_Info& runtime, int* width, int* height)
+{
+    bool laseractive = runtime.aspect_ratio > 0.0f;
+    int selected_ratio = laseractive ? config_video.laseractive_ratio : (config_debug.debug ? 0 : config_video.ratio);
+    float ratio = 0.0f;
+
+    if (config_video.recording_ratio > 0)
+        selected_ratio = config_video.recording_ratio - 1;
+
+    switch (selected_ratio)
+    {
+        case 1:
+            ratio = 4.0f / 3.0f;
+            break;
+        case 2:
+            ratio = 16.0f / 9.0f;
+            break;
+        case 3:
+            ratio = 16.0f / 10.0f;
+            break;
+        case 4:
+            ratio = 6.0f / 5.0f;
+            break;
+        case 5:
+            ratio = ((float)runtime.screen_width / (float)runtime.width_scale) * runtime.pixel_aspect_ratio / (float)runtime.screen_height;
+            break;
+        default:
+            ratio = ((float)runtime.screen_width / (float)runtime.width_scale) / (float)runtime.screen_height;
+    }
+
+    *height = runtime.screen_height * config_video.recording_scale;
+    *width = (int)roundf((float)*height * ratio);
+    *width += *width & 1;
+    *height += *height & 1;
 }
 
 void emu_mcp_set_transport(int mode, int tcp_port, const char* tcp_address)
@@ -1641,16 +1942,6 @@ bool emu_turbolink_is_core_suspended(void)
 bool emu_turbolink_is_cable_connected(void)
 {
     return turbolink_manager && turbolink_manager->IsCableConnected();
-}
-
-bool emu_turbolink_has_remote_peer(void)
-{
-    return turbolink_manager && turbolink_manager->HasRemotePeer();
-}
-
-bool emu_turbolink_is_pacing_peer(void)
-{
-    return turbolink_manager && turbolink_manager->IsPacingPeer();
 }
 
 TurboLinkStatus emu_turbolink_get_status(void)

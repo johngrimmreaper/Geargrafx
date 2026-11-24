@@ -39,7 +39,8 @@ public:
         GG_CdRomMSF end_msf;
         bool has_lead_in;
         u32 lead_in_lba;
-        u32 file_offset;
+        bool lead_in_stored;
+        u64 file_offset;
     };
 
     struct TableOfContents
@@ -57,14 +58,12 @@ public:
     virtual bool LoadFromFile(const char* path, bool preload) = 0;
     virtual bool ReadSector(u32 lba, u8* buffer) = 0;
     virtual bool ReadSamples(u32 lba, u32 offset, s16* buffer, u32 count) = 0;
+    virtual bool ReadSubchannelQ(s32 lba, u8* buffer);
     virtual bool PreloadDisc() = 0;
-    virtual bool PreloadTrack(u32 track_number) = 0;
+    virtual bool PreloadTrack(u32 track_number, u32 lba) = 0;
     bool IsReady();
     u32 GetFirstSectorOfTrack(u8 track);
-    u32 GetLastSectorOfTrack(u8 track);
     s32 GetTrackFromLBA(u32 lba);
-    const char* GetFilePath();
-    const char* GetFileDirectory();
     const char* GetFileName();
     const char* GetFileExtension();
     TableOfContents* GetTOC();
@@ -72,6 +71,7 @@ public:
     u32 GetCurrentSector();
     void SetCurrentSector(u32 sector);
     bool IsAudioSector(u32 lba, bool include_lead_in = false);
+    bool IsPlayableAudioSector(u32 lba);
     s32 FindTrackFromLBA(u32 lba, bool include_lead_in = false);
 
 protected:

@@ -22,94 +22,7 @@
 
 #include "imgui.h"
 #include "geargrafx.h"
-#include "config.h"
-
-struct GuiDebugColor
-{
-    ImVec4 dark;
-    ImVec4 light;
-
-    operator ImVec4() const
-    {
-        return (config_emulator.theme == config_Theme_Light) ? light : dark;
-    }
-};
-
-struct GuiDebugTextColor
-{
-    const char* dark;
-    const char* light;
-
-    const char* c_str() const
-    {
-        return (config_emulator.theme == config_Theme_Light) ? light : dark;
-    }
-
-    operator const char*() const
-    {
-        return c_str();
-    }
-};
-
-static inline ImVec4 gui_debug_color(unsigned int rgb)
-{
-    return ImVec4(((rgb >> 16) & 0xFF) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, 1.0f);
-}
-
-static const GuiDebugColor cyan = { gui_debug_color(0x1AE6E6), gui_debug_color(0x007C91) };
-static const GuiDebugColor dark_cyan = { gui_debug_color(0x004D4D), gui_debug_color(0xCBEFF3) };
-static const GuiDebugColor magenta = { gui_debug_color(0xFF80F5), gui_debug_color(0xB42375) };
-static const GuiDebugColor dark_magenta = { gui_debug_color(0x4D2E45), gui_debug_color(0xF3D6E8) };
-static const GuiDebugColor yellow = { gui_debug_color(0xFFE60D), gui_debug_color(0x8A6000) };
-static const GuiDebugColor dark_yellow = { gui_debug_color(0x4D4000), gui_debug_color(0xF7E7B2) };
-static const GuiDebugColor orange = { gui_debug_color(0xFF8000), gui_debug_color(0xC44D00) };
-static const GuiDebugColor dark_orange = { gui_debug_color(0x993300), gui_debug_color(0xF8D4B6) };
-static const GuiDebugColor red = { gui_debug_color(0xFA2673), gui_debug_color(0xC7254E) };
-static const GuiDebugColor dark_red = { gui_debug_color(0x4D0A29), gui_debug_color(0xF6CDD8) };
-static const GuiDebugColor green = { gui_debug_color(0x1AE61A), gui_debug_color(0x17823B) };
-static const GuiDebugColor dim_green = { gui_debug_color(0x0D660D), gui_debug_color(0x4D7438) };
-static const GuiDebugColor dark_green = { gui_debug_color(0x083305), gui_debug_color(0xD5E8D6) };
-static const GuiDebugColor violet = { gui_debug_color(0xAD82FF), gui_debug_color(0x7047C2) };
-static const GuiDebugColor dark_violet = { gui_debug_color(0x3D264D), gui_debug_color(0xE4D9F7) };
-static const GuiDebugColor blue = { gui_debug_color(0x3366FF), gui_debug_color(0x0969DA) };
-static const GuiDebugColor dark_blue = { gui_debug_color(0x121A4D), gui_debug_color(0xD7E5FA) };
-static const GuiDebugColor white = { gui_debug_color(0xFFFFFF), gui_debug_color(0x21201C) };
-static const GuiDebugColor gray = { gui_debug_color(0x808080), gui_debug_color(0x69645D) };
-static const GuiDebugColor mid_gray = { gui_debug_color(0x666666), gui_debug_color(0x756F67) };
-static const GuiDebugColor dark_gray = { gui_debug_color(0x1A1A1A), gui_debug_color(0x4B4842) };
-static const GuiDebugColor black = { gui_debug_color(0x000000), gui_debug_color(0x21201C) };
-static const GuiDebugColor brown = { gui_debug_color(0xAD805C), gui_debug_color(0x87502C) };
-static const GuiDebugColor dark_brown = { gui_debug_color(0x61330F), gui_debug_color(0xE8D6C8) };
-
-static const GuiDebugTextColor c_cyan = { "{1AE6E6}", "{007C91}" };
-static const GuiDebugTextColor c_dark_cyan = { "{004D4D}", "{CBEFF3}" };
-static const GuiDebugTextColor c_magenta = { "{FF80F5}", "{B42375}" };
-static const GuiDebugTextColor c_dark_magenta = { "{4D2E45}", "{F3D6E8}" };
-static const GuiDebugTextColor c_yellow = { "{FFE60D}", "{8A6000}" };
-static const GuiDebugTextColor c_dark_yellow = { "{4D4000}", "{F7E7B2}" };
-static const GuiDebugTextColor c_orange = { "{FF8000}", "{C44D00}" };
-static const GuiDebugTextColor c_dark_orange = { "{993300}", "{F8D4B6}" };
-static const GuiDebugTextColor c_red = { "{FA2673}", "{C7254E}" };
-static const GuiDebugTextColor c_dark_red = { "{4D0A29}", "{F6CDD8}" };
-static const GuiDebugTextColor c_green = { "{1AE61A}", "{17823B}" };
-static const GuiDebugTextColor c_dim_green = { "{0D660D}", "{4D7438}" };
-static const GuiDebugTextColor c_dark_green = { "{083305}", "{D5E8D6}" };
-static const GuiDebugTextColor c_violet = { "{AD82FF}", "{7047C2}" };
-static const GuiDebugTextColor c_dark_violet = { "{3D264D}", "{E4D9F7}" };
-static const GuiDebugTextColor c_blue = { "{3366FF}", "{0969DA}" };
-static const GuiDebugTextColor c_dark_blue = { "{121A4D}", "{D7E5FA}" };
-static const GuiDebugTextColor c_white = { "{FFFFFF}", "{21201C}" };
-static const GuiDebugTextColor c_gray = { "{808080}", "{69645D}" };
-static const GuiDebugTextColor c_mid_gray = { "{666666}", "{756F67}" };
-static const GuiDebugTextColor c_dark_gray = { "{1A1A1A}", "{4B4842}" };
-static const GuiDebugTextColor c_black = { "{000000}", "{21201C}" };
-static const GuiDebugTextColor c_brown = { "{AD805C}", "{87502C}" };
-static const GuiDebugTextColor c_dark_brown = { "{61330F}", "{E8D6C8}" };
-
-static inline ImVec4 gui_debug_lerp_color(const ImVec4& a, const ImVec4& b, float t)
-{
-    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
-}
+#include "gui_colors.h"
 
 struct stDebugLabel
 {
@@ -117,8 +30,79 @@ struct stDebugLabel
     const char* label;
 };
 
-static const int k_debug_label_count = 43;
-static const stDebugLabel k_debug_labels[k_debug_label_count] = 
+static const stDebugLabel k_debug_laseractive_labels[] =
+{
+    { 0x18C0, "PAC_SRAM_ENABLE" },
+    { 0x18C1, "PAC_ID_AA" },
+    { 0x18C2, "PAC_ID_55" },
+    { 0x18C3, "PAC_SRAM_SIZE" },
+    { 0x1920, "PD_IN_CONTROL" },
+    { 0x1921, "PD_IN_MIXING" },
+    { 0x1922, "PD_IN_DRIVE" },
+    { 0x1923, "PD_IN_PLAYBACK" },
+    { 0x1924, "PD_IN_IN_04" },
+    { 0x1925, "PD_IN_TRACK_INFO" },
+    { 0x1926, "PD_IN_SEEK_MODE" },
+    { 0x1927, "PD_IN_SEEK_TRACK" },
+    { 0x1928, "PD_IN_SEEK_HIGH" },
+    { 0x1929, "PD_IN_SEEK_MID" },
+    { 0x192A, "PD_IN_SEEK_LOW" },
+    { 0x192B, "PD_IN_SEEK_FRAME" },
+    { 0x192C, "PD_IN_VIDEO" },
+    { 0x192D, "PD_IN_DIGITAL_AUDIO" },
+    { 0x192E, "PD_IN_ANALOG_AUDIO" },
+    { 0x192F, "PD_IN_DIGITAL_VOLUME" },
+    { 0x1930, "PD_IN_IN_10" },
+    { 0x1931, "PD_IN_IN_11" },
+    { 0x1932, "PD_IN_IN_12" },
+    { 0x1933, "PD_IN_IN_13" },
+    { 0x1934, "PD_IN_IN_14" },
+    { 0x1935, "PD_IN_IN_15" },
+    { 0x1936, "PD_IN_IN_16" },
+    { 0x1937, "PD_IN_IN_17" },
+    { 0x1938, "PD_IN_IN_18" },
+    { 0x1939, "PD_IN_TRANSPARENCY" },
+    { 0x193A, "PD_IN_SPRITE_FADER" },
+    { 0x193B, "PD_IN_BACKGROUND_FADER" },
+    { 0x193C, "PD_IN_BACKDROP_FADER" },
+    { 0x193D, "PD_IN_BLANKING_FADER" },
+    { 0x193E, "PD_IN_ANALOG_CONTROL" },
+    { 0x193F, "PD_IN_ANALOG_ATTENUATION" },
+    { 0x1940, "PD_OUT_CONTROL" },
+    { 0x1941, "PD_OUT_MODEL" },
+    { 0x1942, "PD_OUT_DISC_TYPE" },
+    { 0x1943, "PD_OUT_DISC_SIDE" },
+    { 0x1944, "PD_OUT_AUDIO" },
+    { 0x1945, "PD_OUT_BUTTON" },
+    { 0x1946, "PD_OUT_DRIVE" },
+    { 0x1947, "PD_OUT_PLAYBACK" },
+    { 0x1948, "PD_OUT_DISC_STATUS" },
+    { 0x1949, "PD_OUT_ERROR" },
+    { 0x194A, "PD_OUT_SEEK_MODE" },
+    { 0x194B, "PD_OUT_SEEK_TRACK" },
+    { 0x194C, "PD_OUT_SEEK_HIGH" },
+    { 0x194D, "PD_OUT_SEEK_MID" },
+    { 0x194E, "PD_OUT_SEEK_LOW" },
+    { 0x194F, "PD_OUT_SEEK_FRAME" },
+    { 0x1950, "PD_OUT_TRACK_INFO" },
+    { 0x1951, "PD_OUT_TOC_CONTROL" },
+    { 0x1952, "PD_OUT_TOC_MINUTE" },
+    { 0x1953, "PD_OUT_TOC_SECOND" },
+    { 0x1954, "PD_OUT_TOC_FRAME" },
+    { 0x1955, "PD_OUT_TRACK" },
+    { 0x1956, "PD_OUT_POSITION_HIGH" },
+    { 0x1957, "PD_OUT_POSITION_MID" },
+    { 0x1958, "PD_OUT_POSITION_LOW" },
+    { 0x1959, "PD_OUT_POSITION_FRAME" },
+    { 0x195A, "PD_OUT_STOP_TRACK" },
+    { 0x195B, "PD_OUT_STOP_FRAME" },
+    { 0x195C, "PD_OUT_STOP_LOW" },
+    { 0x195D, "PD_OUT_STOP_MID" },
+    { 0x195E, "PD_OUT_STOP_HIGH" },
+    { 0x195F, "PD_OUT_STOP_STATUS" },
+};
+
+static const stDebugLabel k_debug_labels[] =
 {
     { 0x0000, "VDC_ADDRESS" },
     { 0x0002, "VDC_DATA_LO" },
@@ -165,9 +149,7 @@ static const stDebugLabel k_debug_labels[k_debug_label_count] =
     { 0x18C3, "CD_SIGNATURE3" }
 };
 
-static const int k_cdrom_bios_symbol_count = 76;
-
-static const stDebugLabel k_cdrom_bios_symbols[k_cdrom_bios_symbol_count] = 
+static const stDebugLabel k_cdrom_bios_symbols[] =
 {
     // CD commands
     { 0xE000, "CD_BOOT"     },
@@ -259,5 +241,9 @@ static const stDebugLabel k_cdrom_bios_symbols[k_cdrom_bios_symbol_count] =
     { 0xE0DE, "GRP_BIOS"    },
     { 0xE0E1, "PSG_DRIVE"   }
 };
+
+static const int k_debug_laseractive_label_count = sizeof(k_debug_laseractive_labels) / sizeof(k_debug_laseractive_labels[0]);
+static const int k_cdrom_bios_symbol_count = sizeof(k_cdrom_bios_symbols) / sizeof(k_cdrom_bios_symbols[0]);
+static const int k_debug_label_count = sizeof(k_debug_labels) / sizeof(k_debug_labels[0]);
 
 #endif /* GUI_DEBUG_CONSTANTS_H */

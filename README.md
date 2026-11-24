@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/github/license/drhelius/Geargrafx)](https://github.com/drhelius/Geargrafx/blob/main/LICENSE)
 [![Twitter Follow](https://img.shields.io/twitter/follow/drhelius)](https://x.com/drhelius)
 
-Geargrafx is a very accurate, cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / PCE CD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for AI debugging and development.
+Geargrafx is a very accurate, cross-platform TurboGrafx-16 / PC Engine / SuperGrafx / CD-ROM² / LD-ROM² emulator written in C++ that runs on Windows, macOS, Linux, BSD and RetroArch, with an embedded MCP server for AI debugging and development.
 
 This is an open source project with its ongoing development made possible thanks to the support by these awesome [backers](backers.md). If you find it useful, please consider [sponsoring](https://github.com/sponsors/drhelius).
 
@@ -30,11 +30,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     <tr>
       <td rowspan="2"><strong>Windows</strong></td>
       <td>Desktop x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-windows-x64.zip">Geargrafx-1.7.20-desktop-windows-x64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-windows-x64.zip">Geargrafx-1.8.9-desktop-windows-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-windows-arm64.zip">Geargrafx-1.7.20-desktop-windows-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-windows-arm64.zip">Geargrafx-1.8.9-desktop-windows-arm64.zip</a></td>
     </tr>
     <tr>
       <td rowspan="3"><strong>macOS</strong></td>
@@ -43,14 +43,14 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
     </tr>
     <tr>
       <td>Desktop Apple Silicon</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-macos-arm64.zip">Geargrafx-1.7.20-desktop-macos-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-macos-arm64.zip">Geargrafx-1.8.9-desktop-macos-arm64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Intel</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-macos-intel.zip">Geargrafx-1.7.20-desktop-macos-intel.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-macos-intel.zip">Geargrafx-1.8.9-desktop-macos-intel.zip</a></td>
     </tr>
     <tr>
-      <td rowspan="5"><strong>Linux</strong></td>
+      <td rowspan="6"><strong>Linux</strong></td>
       <td>Ubuntu PPA</td>
       <td><a href="https://github.com/drhelius/ppa-geardome">drhelius/ppa-geardome</a></td>
     </tr>
@@ -59,16 +59,20 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
       <td><a href="https://github.com/drhelius/rpm-geardome">drhelius/rpm-geardome</a></td>
     </tr>
     <tr>
-      <td>Desktop Ubuntu 24.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu24.04-x64.zip">Geargrafx-1.7.20-desktop-ubuntu24.04-x64.zip</a></td>
+      <td>Desktop Ubuntu 26.04 x64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-ubuntu26.04-x64.zip">Geargrafx-1.8.9-desktop-ubuntu26.04-x64.zip</a></td>
     </tr>
     <tr>
-      <td>Desktop Ubuntu 22.04 x64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu22.04-x64.zip">Geargrafx-1.7.20-desktop-ubuntu22.04-x64.zip</a></td>
+      <td>Desktop Ubuntu 26.04 ARM64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-ubuntu26.04-arm64.zip">Geargrafx-1.8.9-desktop-ubuntu26.04-arm64.zip</a></td>
+    </tr>
+    <tr>
+      <td>Desktop Ubuntu 24.04 x64</td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-ubuntu24.04-x64.zip">Geargrafx-1.8.9-desktop-ubuntu24.04-x64.zip</a></td>
     </tr>
     <tr>
       <td>Desktop Ubuntu 24.04 ARM64</td>
-      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.7.20/Geargrafx-1.7.20-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.7.20-desktop-ubuntu24.04-arm64.zip</a></td>
+      <td><a href="https://github.com/drhelius/Geargrafx/releases/download/1.8.9/Geargrafx-1.8.9-desktop-ubuntu24.04-arm64.zip">Geargrafx-1.8.9-desktop-ubuntu24.04-arm64.zip</a></td>
     </tr>
     <tr>
       <td><strong>MCPB</strong></td>
@@ -97,15 +101,17 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 
 - Accurate emulation supporting the entire HuCard PCE / SGX catalog.
 - Support for CD-ROM², Super CD-ROM² and Arcade CD-ROM² systems.
+- NEC LaserActive LD-ROM² support through MMI images.
 - Save states with preview and rewind support.
 - Run-ahead support to reduce input latency.
 - Backup RAM and Memory Base 128 support.
+- Cheat support for `AAAAAA:VV` codes, with RetroArch `.cht` import.
 - TurboLink multiplayer for two emulator instances on the same machine.
 - Multi Tap (up to 5 players).
 - Standard Gamepad (2 buttons), Avenue Pad 3 (3 buttons, auto-configured based on game), Avenue Pad 6 (6 buttons) and Mouse.
 - Adjustable scanline count (224p, 240p or manual).
 - RGB or Composite color output with optional LPF filter.
-- Compressed ROM and CD image support (pce, sgx, cue, zip and chd).
+- Compressed ROM and CD image support (pce, sgx, cue, zip, chd and mmi).
 - Support for playing physical CD-ROM discs.
 - Music ROM support: HES.
 - VGM recorder.
@@ -113,7 +119,7 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 - Supported platforms (standalone): Windows, Linux, BSD and macOS.
 - Supported platforms (libretro): Windows, Linux, macOS, Raspberry Pi, Android, iOS, tvOS, webOS, PlayStation Vita, PlayStation 3, Nintendo 3DS, Nintendo GameCube, Nintendo Wii, Nintendo WiiU, Nintendo Switch, Emscripten, Classic Mini systems (NES, SNES, C64, ...), OpenDingux, RetroFW and QNX.
 - Full debugger with just-in-time disassembler, CPU breakpoints, memory access breakpoints, code navigation (goto address, JP JR and JSR double clicking), debug symbols, automatic labels, memory editor, PSG inspector and video viewer including registers, tiles, sprites, backgrounds, CD-ROM sub-systems and both VDCs in SuperGrafx mode.
-- MCP server for AI-assisted debugging with GitHub Copilot, Claude, Codex and similar, exposing tools for execution control, memory inspection, hardware status, rewind and more.
+- MCP server for AI-assisted debugging with Claude Code, Codex and similar, exposing tools for execution control, memory inspection, hardware status, rewind and more.
 - Windows, Linux and macOS *Portable Mode*.
 - [Programmable Shader Chain](platforms/shared/desktop/shaders/README.md).
 - ROM loading from the command line by adding the ROM path as an argument.
@@ -124,9 +130,11 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 
 ### Basic Usage
 - **BIOS**: Geargrafx requires a BIOS to run CD-ROM games. It is possible to load any BIOS but the System Card 3.0 with md5 `38179df8f4ac870017db21ebcbf53114` is recommended.
-- **CD-ROM Images**: Geargrafx supports `chd`, zipped and unzipped `cue/bin`, `cue/img` and `cue/iso` images. `cue/iso + wav` is also supported when audio track format is 44100Hz, 16 bit, stereo. It does not support MP3 or OGG audio tracks.
+- **CD-ROM Images**: Geargrafx supports `chd`, zipped and unzipped `cue/bin`, `cue/img` and `cue/iso` images. CUE audio tracks can use raw BIN, compatible WAV (44100 Hz, 16-bit, stereo) or Ogg Vorbis (44100 Hz, stereo) files. MP3 audio tracks are not supported.
+- **LaserActive Images**: Geargrafx supports NEC LD-ROM² `.mmi` images. A Japanese PAC-N1/PCE-LP1 or US PAC-N10 BIOS is required. Change disc sides through **Geargrafx → MMI Media** or libretro disk controls. Desktop rewind and run-ahead are disabled for LaserActive.
 - **Mouse Cursor**: Automatically hides when hovering over the main output window or when Main Menu is disabled.
 - **Portable Mode**: Run with `--portable`, or create an empty file named `portable.ini` in the same directory as the application binary. On macOS, place the file next to the `.app` bundle.
+- **Cheats**: Open **Emulator → Cheats...** to enter codes or import a RetroArch `.cht` file. Codes use the `AAAAAA:VV` format with a physical address, for example `1F0DB1:09` writes `$09` to work RAM `$0DB1`. Join several codes with `+`.
 
 ### Debugging Features
 - **Docking Windows**: In debug mode, you can dock windows together by pressing SHIFT and dragging a window onto another.
@@ -139,12 +147,13 @@ Don't hesitate to report bugs or ask for new features by [opening an issue](http
 geargrafx [options] [game_file] [symbol_file]
 
 Arguments:
-  [game_file]                 Game file: accepts ROMs (.pce, .sgx, .hes), CUE (.cue) or ZIP (.zip)
+  [game_file]                 Accepts ROMs (.pce, .sgx, .hes), CUE (.cue), CHD (.chd), MMI (.mmi) or ZIP (.zip)
   [symbol_file]               Optional symbol file for debugging
 
 Options:
     -f, --fullscreen          Start in fullscreen mode
     -w, --windowed            Start in windowed mode with menu visible
+      --load-state SLOT       Load save state slot 1-5, or a state file, once the media is loaded
       --mcp-stdio             Auto-start MCP server with stdio transport
       --mcp-http              Auto-start MCP server with HTTP transport
       --mcp-router            Enable compact MCP tool routing
@@ -159,7 +168,7 @@ Options:
 
 ### MCP Server
 
-Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like GitHub Copilot, Claude, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more. STDIO and HTTP transports are supported, with STDIO preferred.
+Geargrafx includes a [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) server that enables AI-assisted debugging through AI agents like Claude Code, Codex and similar. The server provides tools for execution control, memory inspection, breakpoints, disassembly, hardware status, rewind and more. STDIO and HTTP transports are supported, with STDIO preferred.
 
 For complete setup instructions and tool documentation, see [MCP_README.md](MCP_README.md).
 
@@ -201,15 +210,15 @@ make dist
 
 - Ubuntu / Debian / Raspberry Pi (Raspbian):
 
-If you are using Ubuntu 25.04 or later, you can install SDL3 directly. Use the following commands to build:
+If you are using Ubuntu 26.04, you can install SDL3 directly. Use the following commands to build:
 
 ``` shell
-sudo apt install build-essential libsdl3-dev
+sudo apt install build-essential pkg-config libsdl3-dev libgl-dev
 cd platforms/linux
 make
 ```
 
-For older Ubuntu versions (22.04, 24.04), you need to build SDL3 from source first. Use the following commands to build both SDL3 and Geargrafx:
+For Ubuntu 24.04, you need to build SDL3 from source first. Use the following commands to build both SDL3 and Geargrafx:
 
 ``` shell
 sudo apt install build-essential cmake git curl jq pkg-config \

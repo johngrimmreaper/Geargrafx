@@ -30,6 +30,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+#if !defined(__LIBRETRO__)
+#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #endif
 #include "defines.h"
 #include "types.h"
@@ -48,6 +53,24 @@ inline bool checked_add_u32(u32 value, u32 addend, u32* result)
     return true;
 }
 
+inline bool checked_add_u64(u64 value, u64 addend, u64* result)
+{
+    if (value > UINT64_MAX - addend)
+        return false;
+
+    *result = value + addend;
+    return true;
+}
+
+inline bool checked_multiply_u64(u64 value, u64 multiplier, u64* result)
+{
+    if ((value != 0) && (multiplier > UINT64_MAX / value))
+        return false;
+
+    *result = value * multiplier;
+    return true;
+}
+
 inline u16 read_u16_le(const u8* p)
 {
     return (u16)p[0] | ((u16)p[1] << 8);
@@ -56,6 +79,17 @@ inline u16 read_u16_le(const u8* p)
 inline u32 read_u32_le(const u8* p)
 {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+inline u64 read_u48_le(const u8* p)
+{
+    return (u64)p[0] | ((u64)p[1] << 8) | ((u64)p[2] << 16) | ((u64)p[3] << 24) | ((u64)p[4] << 32) | ((u64)p[5] << 40);
+}
+
+inline u64 read_u64_le(const u8* p)
+{
+    return (u64)p[0] | ((u64)p[1] << 8) | ((u64)p[2] << 16) | ((u64)p[3] << 24) | ((u64)p[4] << 32) | ((u64)p[5] << 40) | 
+        ((u64)p[6] << 48) | ((u64)p[7] << 56);
 }
 
 inline void write_u16_le(u8* p, u16 value)
@@ -280,19 +314,6 @@ inline void append_path_component(std::string& path, const char* component)
     path += component;
 }
 
-inline bool create_directory_if_not_exists(const char* path)
-{
-#if defined(_WIN32)
-    int res = _mkdir(path);
-#else
-    int res = mkdir(path, 0755);
-#endif
-    if (res == 0 || errno == EEXIST)
-        return true;
-    else
-        return false;
-}
-
 #if defined(_WIN32)
 inline std::wstring utf8_to_wstring(const char* utf8_str)
 {
@@ -306,6 +327,21 @@ inline std::wstring utf8_to_wstring(const char* utf8_str)
     std::wstring wstr(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, &wstr[0], size_needed);
     return wstr;
+}
+
+inline std::string wstring_to_utf8(const wchar_t* wide_str)
+{
+    if (!wide_str || wide_str[0] == L'\0')
+        return std::string();
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, NULL, 0, NULL, NULL);
+    if (size_needed <= 0)
+        return std::string();
+
+    std::string str(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, &str[0], size_needed, NULL, NULL);
+    str.resize(size_needed - 1);
+    return str;
 }
 
 #define open_ifstream_utf8(stream, path, mode) \
@@ -326,6 +362,19 @@ inline FILE* fopen_utf8(const char* path, const char* mode)
     std::wstring wmode = utf8_to_wstring(mode);
     return _wfopen(wpath.c_str(), wmode.c_str());
 }
+
+inline bool rename_file_utf8(const char* from, const char* to)
+{
+    std::wstring wfrom = utf8_to_wstring(from);
+    std::wstring wto = utf8_to_wstring(to);
+    return MoveFileExW(wfrom.c_str(), wto.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+inline bool remove_file_utf8(const char* path)
+{
+    std::wstring wpath = utf8_to_wstring(path);
+    return DeleteFileW(wpath.c_str()) != 0;
+}
 #else
 #define open_ifstream_utf8(stream, path, mode) \
     stream.open(path, mode)
@@ -337,7 +386,142 @@ inline FILE* fopen_utf8(const char* path, const char* mode)
 {
     return fopen(path, mode);
 }
+
+inline bool rename_file_utf8(const char* from, const char* to)
+{
+    return rename(from, to) == 0;
+}
+
+inline bool remove_file_utf8(const char* path)
+{
+    return remove(path) == 0;
+}
 #endif
+
+inline bool create_directory_if_not_exists(const char* path)
+{
+#if defined(_WIN32)
+    int res = _wmkdir(utf8_to_wstring(path).c_str());
+#else
+    int res = mkdir(path, 0755);
+#endif
+    if (res == 0 || errno == EEXIST)
+        return true;
+    else
+        return false;
+}
+
+inline bool create_directory_tree_if_not_exists(const char* path)
+{
+    std::string directory(path);
+
+    for (size_t i = 1; i < directory.length(); i++)
+    {
+        if (directory[i] == '/' || directory[i] == '\\')
+            create_directory_if_not_exists(directory.substr(0, i).c_str());
+    }
+
+    return create_directory_if_not_exists(path);
+}
+
+#if !defined(__LIBRETRO__)
+#if !defined(_WIN32)
+inline bool remove_directory_and_contents_at(int parent_fd, const char* name)
+{
+    int fd = openat(parent_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+
+    if (fd < 0)
+        return errno == ENOENT || unlinkat(parent_fd, name, 0) == 0;
+
+    DIR* dir = fdopendir(fd);
+
+    if (!dir)
+    {
+        close(fd);
+        return false;
+    }
+
+    bool ok = true;
+    struct dirent* entry;
+
+    while ((entry = readdir(dir)) != NULL)
+    {
+        const char* entry_name = entry->d_name;
+
+        if (strcmp(entry_name, ".") && strcmp(entry_name, ".."))
+            ok = remove_directory_and_contents_at(dirfd(dir), entry_name) && ok;
+    }
+
+    closedir(dir);
+    return ok && (unlinkat(parent_fd, name, AT_REMOVEDIR) == 0);
+}
+#endif
+
+inline bool remove_directory_and_contents(const char* path)
+{
+#if defined(_WIN32)
+    std::wstring wpath = utf8_to_wstring(path);
+    DWORD attributes = GetFileAttributesW(wpath.c_str());
+
+    if (attributes == INVALID_FILE_ATTRIBUTES)
+    {
+        DWORD error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    }
+
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY))
+        return DeleteFileW(wpath.c_str()) != 0;
+
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        return RemoveDirectoryW(wpath.c_str()) != 0;
+
+    std::wstring search = utf8_to_wstring((std::string(path) + "\\*").c_str());
+    WIN32_FIND_DATAW fd;
+    HANDLE find = FindFirstFileW(search.c_str(), &fd);
+    bool ok = true;
+
+    if (find != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            if (wcscmp(fd.cFileName, L".") && wcscmp(fd.cFileName, L".."))
+            {
+                std::string item = std::string(path) + "\\" + wstring_to_utf8(fd.cFileName);
+                ok = remove_directory_and_contents(item.c_str()) && ok;
+            }
+        }
+        while (FindNextFileW(find, &fd));
+
+        FindClose(find);
+    }
+
+    return ok && (RemoveDirectoryW(wpath.c_str()) != 0);
+#else
+    return remove_directory_and_contents_at(AT_FDCWD, path);
+#endif
+}
+#endif
+
+inline bool is_safe_zip_entry_name(const char* name)
+{
+    if (name[0] == '\0' || name[0] == '/' || name[0] == '\\' || name[1] == ':')
+        return false;
+
+    const char* component = name;
+
+    while (true)
+    {
+        size_t length = strcspn(component, "/\\");
+
+        if (length == 2 && component[0] == '.' && component[1] == '.')
+            return false;
+
+        if (component[length] == '\0')
+            return true;
+
+        component += length + 1;
+    }
+}
 
 inline bool extract_zip_to_folder(const char* zip_path, const char* out_folder)
 {
@@ -358,7 +542,7 @@ inline bool extract_zip_to_folder(const char* zip_path, const char* out_folder)
 
     string out_dir(out_folder);
 
-    if (!create_directory_if_not_exists(out_dir.c_str()))
+    if (!create_directory_tree_if_not_exists(out_dir.c_str()))
     {
         Error("Failed to create directory %s", out_dir.c_str());
         mz_zip_reader_end(&zip_archive);
@@ -373,22 +557,47 @@ inline bool extract_zip_to_folder(const char* zip_path, const char* out_folder)
         if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat))
         {
             Error("mz_zip_reader_file_stat failed for file %d", i);
-            continue;
+            mz_zip_reader_end(&zip_archive);
+            return false;
+        }
+
+        if (!is_safe_zip_entry_name(file_stat.m_filename))
+        {
+            Error("Unsafe path in ZIP archive: %s", file_stat.m_filename);
+            mz_zip_reader_end(&zip_archive);
+            return false;
+        }
+
+        string name(file_stat.m_filename);
+        size_t separator = name.find('/');
+
+        while (separator != string::npos)
+        {
+            string directory = out_dir + "/" + name.substr(0, separator);
+
+            if (!create_directory_if_not_exists(directory.c_str()))
+            {
+                Error("Failed to create directory %s", directory.c_str());
+                mz_zip_reader_end(&zip_archive);
+                return false;
+            }
+
+            separator = name.find('/', separator + 1);
         }
 
         if (file_stat.m_is_directory)
             continue;
 
-        string out_path = out_dir + "/" + file_stat.m_filename;
+        string out_path = out_dir + "/" + name;
 
         if (!mz_zip_reader_extract_to_file(&zip_archive, i, out_path.c_str(), 0))
         {
             Error("Failed to extract %s", out_path.c_str());
+            mz_zip_reader_end(&zip_archive);
+            return false;
         }
-        else
-        {
-            Debug("Extracted: %s", out_path.c_str());
-        }
+
+        Debug("Extracted: %s", out_path.c_str());
     }
 
     mz_zip_reader_end(&zip_archive);

@@ -8,15 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		A20000000000000000000002 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* AVFAudio.framework */; };
-		B30000000000000000000001 /* libchdr_bitstream.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000001 /* libchdr_bitstream.c */; };
-		B30000000000000000000002 /* libchdr_cdrom.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000002 /* libchdr_cdrom.c */; };
-		B30000000000000000000003 /* libchdr_chd.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000003 /* libchdr_chd.c */; };
-		B30000000000000000000004 /* libchdr_flac.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000004 /* libchdr_flac.c */; };
-		B30000000000000000000005 /* libchdr_huffman.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000005 /* libchdr_huffman.c */; };
+		B30000000000000000000001 /* libchdr_bitstream.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000001 /* libchdr_bitstream.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		B30000000000000000000002 /* libchdr_cdrom.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000002 /* libchdr_cdrom.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		B30000000000000000000003 /* libchdr_chd.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000003 /* libchdr_chd.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		B30000000000000000000004 /* libchdr_flac.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000004 /* libchdr_flac.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		B30000000000000000000005 /* libchdr_huffman.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000005 /* libchdr_huffman.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		B30000000000000000000006 /* LzFind.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000006 /* LzFind.c */; };
 		B30000000000000000000007 /* LzmaEnc.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000007 /* LzmaEnc.c */; };
 		B30000000000000000000008 /* LzmaDec.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000008 /* LzmaDec.c */; };
 		B30000000000000000000009 /* CpuArch.c in Sources */ = {isa = PBXBuildFile; fileRef = B30100000000000000000009 /* CpuArch.c */; };
+		C40000000000000000000001 /* minivorbis.c in Sources */ = {isa = PBXBuildFile; fileRef = C40100000000000000000001 /* minivorbis.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,6 +36,8 @@
 		B30100000000000000000007 /* LzmaEnc.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = LzmaEnc.c; path = ../shared/dependencies/lzma/src/LzmaEnc.c; sourceTree = SOURCE_ROOT; };
 		B30100000000000000000008 /* LzmaDec.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = LzmaDec.c; path = ../shared/dependencies/lzma/src/LzmaDec.c; sourceTree = SOURCE_ROOT; };
 		B30100000000000000000009 /* CpuArch.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = CpuArch.c; path = ../shared/dependencies/lzma/src/CpuArch.c; sourceTree = SOURCE_ROOT; };
+		C40100000000000000000001 /* minivorbis.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = minivorbis.c; path = ../shared/dependencies/minivorbis/minivorbis.c; sourceTree = SOURCE_ROOT; };
+		C40100000000000000000002 /* minivorbis.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = minivorbis.h; path = ../shared/dependencies/minivorbis/minivorbis.h; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -53,6 +56,12 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			name = Miniz;
 			path = ../shared/dependencies/miniz;
+			sourceTree = "<group>";
+		};
+		C50000000000000000000001 /* Qon */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = Qon;
+			path = ../shared/dependencies/qon;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,7 +84,9 @@
 				A10000000000000000000001 /* Geargrafx */,
 				A10000000000000000000002 /* Core */,
 				A10000000000000000000008 /* Miniz */,
+				C50000000000000000000001 /* Qon */,
 				B30200000000000000000001 /* CHD Dependencies */,
+				C40200000000000000000001 /* MiniVorbis */,
 				A10000000000000000000005 /* Support */,
 				A10000000000000000000007 /* LICENSE */,
 				A20000000000000000000003 /* Frameworks */,
@@ -133,6 +144,15 @@
 			name = "CHD Dependencies";
 			sourceTree = "<group>";
 		};
+		C40200000000000000000001 /* MiniVorbis */ = {
+			isa = PBXGroup;
+			children = (
+				C40100000000000000000001 /* minivorbis.c */,
+				C40100000000000000000002 /* minivorbis.h */,
+			);
+			name = MiniVorbis;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -152,6 +172,7 @@
 				A10000000000000000000001 /* Geargrafx */,
 				A10000000000000000000002 /* Core */,
 				A10000000000000000000008 /* Miniz */,
+				C50000000000000000000001 /* Qon */,
 			);
 			name = Geargrafx;
 			packageProductDependencies = (
@@ -224,6 +245,7 @@
 				B30000000000000000000007 /* LzmaEnc.c in Sources */,
 				B30000000000000000000008 /* LzmaDec.c in Sources */,
 				B30000000000000000000009 /* CpuArch.c in Sources */,
+				C40000000000000000000001 /* minivorbis.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,7 +404,9 @@
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/../../src",
 					"$(SRCROOT)/../../src/audio",
+					"$(SRCROOT)/../shared/dependencies/minivorbis",
 					"$(SRCROOT)/../shared/dependencies/miniz",
+					"$(SRCROOT)/../shared/dependencies/json",
 					"$(SRCROOT)/../shared/dependencies/libchdr/include",
 					"$(SRCROOT)/../shared/dependencies/lzma/include",
 					"$(SRCROOT)/../shared/dependencies/zstd",
@@ -395,7 +419,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.7.19;
-				PRODUCT_BUNDLE_IDENTIFIER = me.ignaciosanchez.geargrafx;
+				PRODUCT_BUNDLE_IDENTIFIER = com.drhelius.emus.geargrafx;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -438,7 +462,9 @@
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/../../src",
 					"$(SRCROOT)/../../src/audio",
+					"$(SRCROOT)/../shared/dependencies/minivorbis",
 					"$(SRCROOT)/../shared/dependencies/miniz",
+					"$(SRCROOT)/../shared/dependencies/json",
 					"$(SRCROOT)/../shared/dependencies/libchdr/include",
 					"$(SRCROOT)/../shared/dependencies/lzma/include",
 					"$(SRCROOT)/../shared/dependencies/zstd",
@@ -451,7 +477,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.7.19;
-				PRODUCT_BUNDLE_IDENTIFIER = me.ignaciosanchez.geargrafx;
+				PRODUCT_BUNDLE_IDENTIFIER = com.drhelius.emus.geargrafx;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;

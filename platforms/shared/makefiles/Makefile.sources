@@ -12,9 +12,11 @@ SOURCES_C := \
     $(DEPS_DIR)/lzma/src/LzmaEnc.c \
     $(DEPS_DIR)/lzma/src/LzmaDec.c \
     $(DEPS_DIR)/lzma/src/CpuArch.c \
+    $(DEPS_DIR)/minivorbis/minivorbis.c \
     $(DEPS_DIR)/miniz/miniz.c \
 
 SOURCES_CXX := \
+    $(DEPS_DIR)/qon/qon.cpp \
     $(DEPS_DIR)/imgui/imgui_impl_sdl3.cpp \
     $(DEPS_DIR)/imgui/imgui_impl_opengl3.cpp \
     $(DEPS_DIR)/imgui/imgui.cpp \
@@ -32,12 +34,17 @@ SOURCES_CXX := \
     $(DESKTOP_SRC_DIR)/gui.cpp \
     $(DESKTOP_SRC_DIR)/gui_filedialogs.cpp \
     $(DESKTOP_SRC_DIR)/gui_hes.cpp \
+    $(DESKTOP_SRC_DIR)/gui_cheats.cpp \
     $(DESKTOP_SRC_DIR)/gui_menus.cpp \
     $(DESKTOP_SRC_DIR)/gui_popups.cpp \
+    $(DESKTOP_SRC_DIR)/gui_shader.cpp \
     $(DESKTOP_SRC_DIR)/gui_actions.cpp \
+    $(DESKTOP_SRC_DIR)/gui_notifications.cpp \
+    $(DESKTOP_SRC_DIR)/gui_drive_activity.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_cdrom.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_cdrom_audio.cpp \
+    $(DESKTOP_SRC_DIR)/gui_debug_laseractive.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_adpcm.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_disassembler.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_huc6202.cpp \
@@ -51,6 +58,7 @@ SOURCES_CXX := \
     $(DESKTOP_SRC_DIR)/gui_debug_memory.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_psg.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_trace_logger.cpp \
+    $(DESKTOP_SRC_DIR)/gui_debug_profiler.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_turbolink.cpp \
     $(DESKTOP_SRC_DIR)/gui_debug_rewind.cpp \
     $(DESKTOP_SRC_DIR)/trace_logger_formatter.cpp \
@@ -63,6 +71,7 @@ SOURCES_CXX := \
     $(DESKTOP_SRC_DIR)/gamepad.cpp \
     $(DESKTOP_SRC_DIR)/rewind.cpp \
     $(DESKTOP_SRC_DIR)/runahead.cpp \
+    $(DESKTOP_SRC_DIR)/video_recorder.cpp \
     $(DESKTOP_SRC_DIR)/emu.cpp \
     $(DESKTOP_SRC_DIR)/sound_queue.cpp \
     $(DESKTOP_SRC_DIR)/single_instance.cpp \
@@ -78,8 +87,12 @@ SOURCES_CXX := \
     $(SRC_DIR)/cdrom_chd_file_adapter.cpp \
     $(SRC_DIR)/cdrom_chd_image.cpp \
     $(SRC_DIR)/cdrom_cuebin_image.cpp \
+    $(SRC_DIR)/cdrom_mmi_image.cpp \
     $(SRC_DIR)/media_file.cpp \
     $(SRC_DIR)/media_file_native.cpp \
+    $(SRC_DIR)/media_file_slice.cpp \
+    $(SRC_DIR)/mmi_archive.cpp \
+    $(SRC_DIR)/ogg_vorbis_decoder.cpp \
     $(SRC_DIR)/cdrom_image.cpp \
     $(SRC_DIR)/cdrom_media.cpp \
     $(SRC_DIR)/cdrom.cpp \
@@ -91,6 +104,8 @@ SOURCES_CXX := \
     $(SRC_DIR)/huc6280_opcodes.cpp \
     $(SRC_DIR)/huc6280_psg.cpp \
     $(SRC_DIR)/input.cpp \
+    $(SRC_DIR)/laseractive.cpp \
+    $(SRC_DIR)/load_detector.cpp \
     $(SRC_DIR)/mapper.cpp \
     $(SRC_DIR)/mb128.cpp \
     $(SRC_DIR)/media.cpp \
@@ -98,5 +113,6 @@ SOURCES_CXX := \
     $(SRC_DIR)/scsi_controller.cpp \
     $(SRC_DIR)/sf2_mapper.cpp \
     $(SRC_DIR)/trace_logger.cpp \
+    $(SRC_DIR)/profiler.cpp \
     $(SRC_DIR)/turbolink.cpp \
     $(SRC_DIR)/vgm_recorder.cpp

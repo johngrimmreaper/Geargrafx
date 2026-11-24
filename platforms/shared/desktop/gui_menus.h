@@ -29,10 +29,13 @@
 EXTERN char gui_savefiles_path[4096];
 EXTERN char gui_savestates_path[4096];
 EXTERN char gui_screenshots_path[4096];
+EXTERN char gui_video_recordings_path[4096];
 EXTERN char gui_backup_ram_path[4096];
 EXTERN char gui_mb128_path[4096];
 EXTERN char gui_syscard_bios_path[4096];
 EXTERN char gui_gameexpress_bios_path[4096];
+EXTERN char gui_pac_japan_bios_path[4096];
+EXTERN char gui_pac_us_bios_path[4096];
 EXTERN char gui_mcp_http_address[64];
 
 EXTERN void gui_init_menus(void);

@@ -19,6 +19,9 @@
 
 #include <SDL3/SDL_main.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
 #include "geargrafx.h"
 #include "application.h"
 #include "application_headless.h"
@@ -28,8 +31,15 @@
 extern bool g_mcp_stdio_mode;
 extern bool g_mcp_router_enabled;
 
+static bool option_has_value(const char* option);
+static const char* option_value(int argc, char* argv[], int* i);
+
 int main(int argc, char* argv[])
 {
+#if !defined(_WIN32)
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     attach_parent_console(argc, argv);
 
     ApplicationParams app_params;
@@ -67,7 +77,7 @@ int main(int argc, char* argv[])
             }
             else if (strcmp(argv[i], "--mcp-stdio") == 0)
             {
-                g_mcp_stdio_mode = true;  // Disable logging immediately
+                g_mcp_stdio_mode = true;
                 mcp_stdio_set = true;
                 app_params.mcp_mode = 0;
             }
@@ -87,6 +97,18 @@ int main(int argc, char* argv[])
             else if (strcmp(argv[i], "--portable") == 0)
             {
                 portable = true;
+            }
+            else if (strcmp(argv[i], "--load-state") == 0)
+            {
+                const char* value = option_value(argc, argv, &i);
+
+                if (!value)
+                    return -1;
+
+                if ((strlen(value) == 1) && (value[0] >= '1') && (value[0] <= '5'))
+                    app_params.state_slot = value[0] - '0';
+                else
+                    app_params.state_file = value;
             }
             else if (strcmp(argv[i], "--mcp-http-port") == 0)
             {
@@ -150,9 +172,7 @@ int main(int argc, char* argv[])
     int non_option_count = 0;
     for (int i = 1; i < argc; i++)
     {
-        if ((strcmp(argv[i], "--mcp-http-port") == 0) ||
-            (strcmp(argv[i], "--mcp-http-address") == 0) ||
-            (strcmp(argv[i], "--turbolink-join") == 0))
+        if (option_has_value(argv[i]))
         {
             if (i + 1 < argc)
                 i++;
@@ -187,21 +207,22 @@ int main(int argc, char* argv[])
     {
         printf("Usage: %s [options] [game_file] [symbol_file]\n", argv[0]);
         printf("\nArguments:\n");
-        printf("  [game_file]                 Game file: accepts ROMs (.pce, .sgx, .hes), CUE (.cue) or ZIP (.zip)\n");
-        printf("  [symbol_file]               Optional symbol file for debugging\n");
+        printf("  [game_file]               ROMs (.pce, .sgx, .hes), CD images (.cue, .chd), MMI (.mmi) or ZIP (.zip)\n");
+        printf("  [symbol_file]             Optional symbol file for debugging\n");
         printf("\nOptions:\n");
-        printf("  -f, --fullscreen            Start in fullscreen mode\n");
-        printf("  -w, --windowed              Start in windowed mode with menu visible\n");
-        printf("      --mcp-stdio             Auto-start MCP server with stdio transport\n");
-        printf("      --mcp-http              Auto-start MCP server with HTTP transport\n");
-        printf("      --mcp-router            Enable compact MCP tool routing\n");
-        printf("      --mcp-http-address A    HTTP bind address (default: 127.0.0.1)\n");
-        printf("      --mcp-http-port N       HTTP port for MCP server (default: 7777)\n");
-        printf("      --turbolink-join N      Join local TurboLink shared session 1-255\n");
-        printf("      --headless              Run without GUI (requires MCP or TurboLink)\n");
-        printf("      --portable              Store configuration and user data beside the application\n");
-        printf("  -v, --version               Display version information\n");
-        printf("  -h, --help                  Display this help message\n");
+        printf("  -f, --fullscreen          Start in fullscreen mode\n");
+        printf("  -w, --windowed            Start in windowed mode with menu visible\n");
+        printf("      --load-state SLOT     Load save state slot 1-5, or a state file, once the media is loaded\n");
+        printf("      --mcp-stdio           Auto-start MCP server with stdio transport\n");
+        printf("      --mcp-http            Auto-start MCP server with HTTP transport\n");
+        printf("      --mcp-router          Enable compact MCP tool routing\n");
+        printf("      --mcp-http-address A  HTTP bind address (default: 127.0.0.1)\n");
+        printf("      --mcp-http-port N     HTTP port for MCP server (default: 7777)\n");
+        printf("      --turbolink-join N    Join local TurboLink shared session 1-255\n");
+        printf("      --headless            Run without GUI (requires MCP or TurboLink)\n");
+        printf("      --portable            Store configuration and user data beside the application\n");
+        printf("  -v, --version             Display version information\n");
+        printf("  -h, --help                Display this help message\n");
         return ret;
     }
 
@@ -259,4 +280,29 @@ int main(int argc, char* argv[])
     config_destroy();
 
     return ret;
+}
+
+static bool option_has_value(const char* option)
+{
+    static const char* const k_options[] = { "--mcp-http-port", "--mcp-http-address", "--turbolink-join",
+        "--load-state" };
+
+    for (size_t i = 0; i < sizeof(k_options) / sizeof(k_options[0]); i++)
+    {
+        if (strcmp(option, k_options[i]) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+static const char* option_value(int argc, char* argv[], int* i)
+{
+    if ((*i + 1 >= argc) || (argv[*i + 1][0] == '-'))
+    {
+        fprintf(stderr, "Missing value for %s\n", argv[*i]);
+        return NULL;
+    }
+
+    return argv[++(*i)];
 }
